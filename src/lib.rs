@@ -1,6 +1,8 @@
 use std::fs::copy;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+use log::*;
+use std::time::SystemTime;
 
 #[cfg(test)]
 mod tests {
@@ -19,7 +21,7 @@ mod tests {
             &Path::new("dest"),
         )
         .overwrite(true)
-        .overwrite_only_newer(true)
+        .overwrite_if_newer(true)
         .build()
         .unwrap();
 
@@ -33,68 +35,160 @@ mod tests {
 pub struct DirCopy {
     pub source: PathBuf,
     pub destination: PathBuf,
-    pub overwrite: bool,
-    pub overwrite_only_newer: bool,
+    overwrite_all: bool,
+    overwrite_if_newer: bool,
+    overwrite_if_size_differs: bool,
+    exclude_filters: Vec<String>,
+    include_filters: Vec<String>
 }
+
+/// Determine if the modification date of file_a is newer than that of file_b
+fn is_file_newer(file_a: &Path, file_b: &Path) -> bool {
+    match (file_a.metadata(), file_b.metadata()) {
+        (Ok(meta_a), Ok(meta_b)) => {
+            meta_a.modified().unwrap_or(SystemTime::now()) > meta_b.modified().unwrap_or(SystemTime::UNIX_EPOCH) 
+        },
+        _ => false
+    }
+}
+
+/// Determine if file_a and file_b's size differs. 
+fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
+    match (file_a.metadata(), file_b.metadata()) {
+        (Ok(meta_a), Ok(meta_b)) => {
+            meta_a.len() != meta_b.len() 
+        },
+        _ => false
+    }
+}
+
 
 impl DirCopy {
     pub fn new(source: &Path, destination: &Path) -> DirCopy {
         DirCopy {
             source: source.to_owned(),
             destination: destination.to_path_buf(),
-            overwrite: false,
-            overwrite_only_newer: false,
+            overwrite_all: false,
+            overwrite_if_newer: false,
+            overwrite_if_size_differs: false,
+            exclude_filters: vec![],
+            include_filters: vec![]
         }
     }
 
     pub fn overwrite(self, overwrite: bool) -> DirCopy {
         DirCopy {
-            overwrite,
+            overwrite_all: overwrite,
             ..self.clone()
         }
     }
 
-    pub fn overwrite_only_newer(self, overwrite_only_newer: bool) -> DirCopy {
+    pub fn overwrite_if_newer(self, overwrite_only_newer: bool) -> DirCopy {
         DirCopy {
-            overwrite_only_newer,
+            overwrite_if_newer: overwrite_only_newer,
+            ..self.clone()
+        }
+    }
+
+    pub fn overwrite_if_size_differs(self, overwrite_if_size_differs: bool) -> DirCopy {
+        DirCopy {
+            overwrite_if_size_differs: overwrite_if_size_differs,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_exclude_filter(self, f: &str) -> DirCopy {
+        let mut filters = self.exclude_filters.clone();
+        filters.push(f.to_owned());
+        DirCopy {
+            exclude_filters: filters,
+            ..self.clone()
+        }
+    }
+    
+    pub fn with_include_filter(self, f: &str) -> DirCopy {
+        let mut filters = self.exclude_filters.clone();
+        filters.push(f.to_owned());
+        DirCopy {
+            include_filters: filters,
             ..self.clone()
         }
     }
 
     pub fn build(&self) -> Result<(), std::io::Error> {
-        let abs_source = self.source.canonicalize().unwrap();
+        
+        if !self.destination.is_dir() {
+            info!("MKDIR {:?}", &self.destination);
 
-        if self.destination.is_dir() {
-        } else {
             std::fs::create_dir_all(&self.destination)?;
         }
+        let abs_source = self.source.canonicalize().unwrap();
         let abs_dest = self.destination.canonicalize().unwrap();
+        info!("Building copy operation: SRC {} DST {}", abs_source.display(), abs_dest.display());
 
         for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
             let rel_dest = entry.path().strip_prefix(&abs_source).unwrap();
             let dest_entry = abs_dest.join(rel_dest);
-            println!("SRC {} DST {:?}", abs_source.display(), dest_entry);
 
-            if entry.path().is_file() {
-                println!("CP {:?} DST {:?}", entry.path(), dest_entry);
+            // if entry.path().to_string_lossy().contains("main_menu_v2.xml") {
+            //     // info!("Menu: SRC {} DST {} smod{:?} dmod{:?}", entry.path().display(), dest_entry.display(), src_mod,dst_mod);
+            //     info!("newer? {}", is_file_newer(entry.path(), &dest_entry));
+            //     info!("settings {:?}", self);
+            // }
 
+            if entry.path().is_file() { // the source exists
+
+                
                 // Early out if target is present and overwrite is off
-                if !self.overwrite && dest_entry.is_file() {
+                if !self.overwrite_all && dest_entry.is_file() && !self.overwrite_if_newer && !self.overwrite_if_size_differs {
                     continue;
                 }
 
-                if self.overwrite_only_newer { //overwrite if newer
-                    if entry.path().metadata().unwrap().modified().unwrap()
-                        >= dest_entry.metadata().unwrap().modified().unwrap()
-                    {
-                        println!("FILE NEWER {:?} DST {:?}", entry.path(), dest_entry);
-                        copy(entry.path(), dest_entry)?;
+                for f in &self.exclude_filters {
+                    if entry.path().to_string_lossy().contains(f) {
+                        continue;
                     }
-                } else { // overwrite all files
-                    copy(entry.path(), dest_entry)?;
                 }
-            } else if entry.path().is_dir() {
-                println!("MKDIR {:?}", entry.path());
+                
+                for f in &self.include_filters {
+                    if !entry.path().to_string_lossy().contains(f) {
+                        continue;
+                     }
+                }
+
+                // File is not present: copy it
+                if !dest_entry.is_file() {
+                    info!("Dest not present: CP {} DST {}", entry.path().display(), dest_entry.display());
+                    copy(entry.path(), dest_entry)?;
+                    continue;
+                }
+
+                if self.overwrite_if_newer { //overwrite if newer
+                    if is_file_newer(entry.path(), &dest_entry) {
+                        info!("Source newer: CP {} DST {}", entry.path().display(), dest_entry.display());
+                        copy(entry.path(), &dest_entry)?;
+                    }
+                    continue;
+                }
+
+                if self.overwrite_if_size_differs { //overwrite if newer
+                    if is_filesize_different(entry.path(), &dest_entry) {
+                        info!("Source differs: CP {} DST {}", entry.path().display(), dest_entry.display());
+                        copy(entry.path(), &dest_entry)?;
+                    }
+                    continue;
+                }
+
+                 
+                     
+                
+                
+                info!("CP {} DST {}", entry.path().display(), dest_entry.display());
+                copy(entry.path(), dest_entry)?;
+            
+            
+            } else if entry.path().is_dir() && !dest_entry.is_dir() {
+                info!("MKDIR {}", entry.path().display());
                 std::fs::create_dir_all(dest_entry)?;
                 // copy(entry.path(), dest_entry).unwrap();
             }
