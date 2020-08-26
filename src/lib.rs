@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use log::*;
 use std::time::SystemTime;
+use std::io::{Error, ErrorKind};
 
 #[cfg(test)]
 mod tests {
@@ -97,6 +98,7 @@ impl DirCopy {
         }
     }
 
+    /// Do not copy files that contain this string
     pub fn with_exclude_filter(self, f: &str) -> DirCopy {
         let mut filters = self.exclude_filters.clone();
         filters.push(f.to_owned());
@@ -106,6 +108,7 @@ impl DirCopy {
         }
     }
     
+    /// Only copy files that contain this string.
     pub fn with_include_filter(self, f: &str) -> DirCopy {
         let mut filters = self.exclude_filters.clone();
         filters.push(f.to_owned());
@@ -118,23 +121,16 @@ impl DirCopy {
     pub fn build(&self) -> Result<(), std::io::Error> {
         
         if !self.destination.is_dir() {
-            info!("MKDIR {:?}", &self.destination);
-
+            debug!("MKDIR {:?}", &self.destination);
             std::fs::create_dir_all(&self.destination)?;
         }
-        let abs_source = self.source.canonicalize().unwrap();
-        let abs_dest = self.destination.canonicalize().unwrap();
-        info!("Building copy operation: SRC {} DST {}", abs_source.display(), abs_dest.display());
+        let abs_source = self.source.canonicalize()?;
+        let abs_dest = self.destination.canonicalize()?;
+        debug!("Building copy operation: SRC {} DST {}", abs_source.display(), abs_dest.display());
 
         for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
-            let rel_dest = entry.path().strip_prefix(&abs_source).unwrap();
+            let rel_dest = entry.path().strip_prefix(&abs_source).map_err(|e | Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}",e)) )?;
             let dest_entry = abs_dest.join(rel_dest);
-
-            // if entry.path().to_string_lossy().contains("main_menu_v2.xml") {
-            //     // info!("Menu: SRC {} DST {} smod{:?} dmod{:?}", entry.path().display(), dest_entry.display(), src_mod,dst_mod);
-            //     info!("newer? {}", is_file_newer(entry.path(), &dest_entry));
-            //     info!("settings {:?}", self);
-            // }
 
             if entry.path().is_file() { // the source exists
 
@@ -158,39 +154,38 @@ impl DirCopy {
 
                 // File is not present: copy it
                 if !dest_entry.is_file() {
-                    info!("Dest not present: CP {} DST {}", entry.path().display(), dest_entry.display());
+                    debug!("Dest not present: CP {} DST {}", entry.path().display(), dest_entry.display());
                     copy(entry.path(), dest_entry)?;
                     continue;
                 }
 
-                if self.overwrite_if_newer { //overwrite if newer
+                // File newer?
+                if self.overwrite_if_newer { 
                     if is_file_newer(entry.path(), &dest_entry) {
-                        info!("Source newer: CP {} DST {}", entry.path().display(), dest_entry.display());
+                        debug!("Source newer: CP {} DST {}", entry.path().display(), dest_entry.display());
                         copy(entry.path(), &dest_entry)?;
                     }
                     continue;
                 }
 
-                if self.overwrite_if_size_differs { //overwrite if newer
+                // Different size?
+                if self.overwrite_if_size_differs {
                     if is_filesize_different(entry.path(), &dest_entry) {
-                        info!("Source differs: CP {} DST {}", entry.path().display(), dest_entry.display());
+                        debug!("Source differs: CP {} DST {}", entry.path().display(), dest_entry.display());
                         copy(entry.path(), &dest_entry)?;
                     }
                     continue;
                 }
-
-                 
                      
                 
-                
-                info!("CP {} DST {}", entry.path().display(), dest_entry.display());
+                // The regular copy operation
+                debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
                 copy(entry.path(), dest_entry)?;
             
             
             } else if entry.path().is_dir() && !dest_entry.is_dir() {
-                info!("MKDIR {}", entry.path().display());
+                debug!("MKDIR {}", entry.path().display());
                 std::fs::create_dir_all(dest_entry)?;
-                // copy(entry.path(), dest_entry).unwrap();
             }
         }
 
