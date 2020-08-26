@@ -1,5 +1,7 @@
 # dircpy
 
+[![Actions Status](https://github.com/woelper/dircpy/workflows/Rust/badge.svg)](https://github.com/woelper/dircpy/actions)
+
 Recursively copy directories, with some convenience added.
 
 - Preserves permissions, also executable bit
