@@ -3,6 +3,9 @@ name = "dircpy"
 version = "0.1.0"
 authors = ["Johann Woelper <woelper@gmail.com>"]
 edition = "2018"
+license = "MIT"
+description = "Copy directories recursively with flexible options."
+repository = "https://github.com/woelper/dircpy/"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
