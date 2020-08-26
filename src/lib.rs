@@ -33,8 +33,11 @@ mod tests {
 }
 
 #[derive(Debug, Clone)]
+/// Recursively copy a directory from a to b.
 pub struct DirCopy {
+    /// The source directory
     pub source: PathBuf,
+    /// the destination directory
     pub destination: PathBuf,
     overwrite_all: bool,
     overwrite_if_newer: bool,
@@ -77,6 +80,7 @@ impl DirCopy {
         }
     }
 
+    /// Overwrite target files (off by default)
     pub fn overwrite(self, overwrite: bool) -> DirCopy {
         DirCopy {
             overwrite_all: overwrite,
@@ -84,6 +88,7 @@ impl DirCopy {
         }
     }
 
+    /// Overwrite if the source is newer (off by default)
     pub fn overwrite_if_newer(self, overwrite_only_newer: bool) -> DirCopy {
         DirCopy {
             overwrite_if_newer: overwrite_only_newer,
@@ -91,6 +96,7 @@ impl DirCopy {
         }
     }
 
+    /// Overwrite if size between source and dest differs (off by default)
     pub fn overwrite_if_size_differs(self, overwrite_if_size_differs: bool) -> DirCopy {
         DirCopy {
             overwrite_if_size_differs: overwrite_if_size_differs,
@@ -118,6 +124,7 @@ impl DirCopy {
         }
     }
 
+    /// Execute the copy operation
     pub fn build(&self) -> Result<(), std::io::Error> {
         
         if !self.destination.is_dir() {
