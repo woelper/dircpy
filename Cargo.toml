@@ -1,6 +1,6 @@
 [package]
 name = "dircpy"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Johann Woelper <woelper@gmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -12,3 +12,8 @@ repository = "https://github.com/woelper/dircpy/"
 [dependencies]
 walkdir = "2.3.1"
 log = "0.4.11"
+
+
+[dev-dependencies]
+unzip = "0.1.0"
+reqwest = { version = "0.10.8", features = ["blocking"] }
