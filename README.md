@@ -26,5 +26,3 @@ CopyBuilder::new("src", "dest")
   .unwrap();
   
 ```
-Todo:
-Preserves executable bit
