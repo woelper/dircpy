@@ -17,13 +17,13 @@ fn copy() {
             .unwrap();
     }
 
-    DirCopy::new(
-        &Path::new("source").canonicalize().unwrap(),
-        &Path::new("dest"),
+    CopyBuilder::new(
+        "source",
+        "dest",
     )
     .overwrite(true)
     .overwrite_if_newer(true)
-    .build()
+    .run()
     .unwrap();
 
     #[cfg(unix)]
@@ -59,11 +59,11 @@ fn kernel() {
         .filter_map(|e| e.ok())
         .count();
 
-    DirCopy::new(
+    CopyBuilder::new(
         &Path::new(sample_dir).canonicalize().unwrap(),
-        &Path::new(&output_dir),
+        &PathBuf::from(&output_dir),
     )
-    .build()
+    .run()
     .unwrap();
 
     let num_output_files = WalkDir::new(&output_dir)

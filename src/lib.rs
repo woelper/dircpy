@@ -10,7 +10,28 @@ mod tests;
 
 #[derive(Debug, Clone)]
 /// Recursively copy a directory from a to b.
-pub struct DirCopy {
+/// ```
+/// use dircpy::*;
+///
+/// // Most basid example:
+/// copy_dir("src", "dest");
+///
+/// // Simple builder example:
+///CopyBuilder::new("src", "dest")
+///.run()
+///.unwrap();
+///
+/// // Copy recursively, only including certain files:
+///CopyBuilder::new("src", "dest")
+///.overwrite_if_newer(true)
+///.overwrite_if_size_differs(true)
+///.with_include_filter(".txt")
+///.with_include_filter(".csv")
+///.run()
+///.unwrap();
+/// ```
+
+pub struct CopyBuilder {
     /// The source directory
     pub source: PathBuf,
     /// the destination directory
@@ -41,11 +62,13 @@ fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
     }
 }
 
-impl DirCopy {
-    pub fn new(source: &Path, destination: &Path) -> DirCopy {
-        DirCopy {
-            source: source.to_owned(),
-            destination: destination.to_path_buf(),
+impl CopyBuilder {
+
+    /// Construct a new CopyBuilder with `source` and `dest`.
+    pub fn new<P: AsRef<Path>>(source: P, dest: P) -> CopyBuilder {
+        CopyBuilder {
+            source: source.as_ref().to_path_buf(),
+            destination: dest.as_ref().to_path_buf(),
             overwrite_all: false,
             overwrite_if_newer: false,
             overwrite_if_size_differs: false,
@@ -55,51 +78,51 @@ impl DirCopy {
     }
 
     /// Overwrite target files (off by default)
-    pub fn overwrite(self, overwrite: bool) -> DirCopy {
-        DirCopy {
+    pub fn overwrite(self, overwrite: bool) -> CopyBuilder {
+        CopyBuilder {
             overwrite_all: overwrite,
             ..self
         }
     }
 
     /// Overwrite if the source is newer (off by default)
-    pub fn overwrite_if_newer(self, overwrite_only_newer: bool) -> DirCopy {
-        DirCopy {
+    pub fn overwrite_if_newer(self, overwrite_only_newer: bool) -> CopyBuilder {
+        CopyBuilder {
             overwrite_if_newer: overwrite_only_newer,
             ..self
         }
     }
 
     /// Overwrite if size between source and dest differs (off by default)
-    pub fn overwrite_if_size_differs(self, overwrite_if_size_differs: bool) -> DirCopy {
-        DirCopy {
+    pub fn overwrite_if_size_differs(self, overwrite_if_size_differs: bool) -> CopyBuilder {
+        CopyBuilder {
             overwrite_if_size_differs,
             ..self
         }
     }
 
     /// Do not copy files that contain this string
-    pub fn with_exclude_filter(self, f: &str) -> DirCopy {
+    pub fn with_exclude_filter(self, f: &str) -> CopyBuilder {
         let mut filters = self.exclude_filters.clone();
         filters.push(f.to_owned());
-        DirCopy {
+        CopyBuilder {
             exclude_filters: filters,
             ..self
         }
     }
 
     /// Only copy files that contain this string.
-    pub fn with_include_filter(self, f: &str) -> DirCopy {
+    pub fn with_include_filter(self, f: &str) -> CopyBuilder {
         let mut filters = self.exclude_filters.clone();
         filters.push(f.to_owned());
-        DirCopy {
+        CopyBuilder {
             include_filters: filters,
             ..self
         }
     }
 
     /// Execute the copy operation
-    pub fn build(&self) -> Result<(), std::io::Error> {
+    pub fn run(&self) -> Result<(), std::io::Error> {
         if !self.destination.is_dir() {
             debug!("MKDIR {:?}", &self.destination);
             std::fs::create_dir_all(&self.destination)?;
@@ -190,4 +213,30 @@ impl DirCopy {
 
         Ok(())
     }
+}
+
+/// Copy a directory from `source` to `dest`, creating `dest`, with all options.
+pub fn copy_dir_advanced<P: AsRef<Path>>(source: P, dest:P, overwrite_all: bool, overwrite_if_newer: bool, overwrite_if_size_differs: bool, exclude_filters: Vec<String>, include_filters: Vec<String>) -> Result<(), std::io::Error>{
+    CopyBuilder {
+        source: source.as_ref().to_path_buf(),
+        destination: dest.as_ref().to_path_buf(),
+        overwrite_all,
+        overwrite_if_newer,
+        overwrite_if_size_differs,
+        exclude_filters,
+        include_filters,
+    }.run()
+}
+
+/// Copy a directory from `source` to `dest`, creating `dest`, with minimal options.
+pub fn copy_dir<P: AsRef<Path>>(source: P, dest:P) -> Result<(), std::io::Error>{
+    CopyBuilder {
+        source: source.as_ref().to_path_buf(),
+        destination: dest.as_ref().to_path_buf(),
+        overwrite_all: false,
+        overwrite_if_newer: false,
+        overwrite_if_size_differs: false,
+        exclude_filters: vec![],
+        include_filters: vec![],
+    }.run()
 }
