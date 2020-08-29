@@ -1,5 +1,7 @@
 # dircpy
-
+[![Crates.io](https://img.shields.io/crates/v/dircpy.svg)](https://crates.io/crates/dircpy)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/woelper/dircpy/blob/master/LICENSE)
+[![Docs Status](https://docs.rs/dircpy/badge.svg)](https://docs.rs/dircpy)
 [![Actions Status](https://github.com/woelper/dircpy/workflows/Rust/badge.svg)](https://github.com/woelper/dircpy/actions)
 
 A library to recursively copy directories, with some convenience added.
