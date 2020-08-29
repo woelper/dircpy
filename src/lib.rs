@@ -13,7 +13,7 @@ mod tests;
 /// ```
 /// use dircpy::*;
 ///
-/// // Most basid example:
+/// // Most basic example:
 /// copy_dir("src", "dest");
 ///
 /// // Simple builder example:
