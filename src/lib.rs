@@ -65,7 +65,7 @@ fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
 impl CopyBuilder {
 
     /// Construct a new CopyBuilder with `source` and `dest`.
-    pub fn new<P: AsRef<Path>>(source: P, dest: P) -> CopyBuilder {
+    pub fn new<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> CopyBuilder {
         CopyBuilder {
             source: source.as_ref().to_path_buf(),
             destination: dest.as_ref().to_path_buf(),
@@ -216,7 +216,7 @@ impl CopyBuilder {
 }
 
 /// Copy a directory from `source` to `dest`, creating `dest`, with all options.
-pub fn copy_dir_advanced<P: AsRef<Path>>(source: P, dest:P, overwrite_all: bool, overwrite_if_newer: bool, overwrite_if_size_differs: bool, exclude_filters: Vec<String>, include_filters: Vec<String>) -> Result<(), std::io::Error>{
+pub fn copy_dir_advanced<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q, overwrite_all: bool, overwrite_if_newer: bool, overwrite_if_size_differs: bool, exclude_filters: Vec<String>, include_filters: Vec<String>) -> Result<(), std::io::Error>{
     CopyBuilder {
         source: source.as_ref().to_path_buf(),
         destination: dest.as_ref().to_path_buf(),
@@ -229,7 +229,7 @@ pub fn copy_dir_advanced<P: AsRef<Path>>(source: P, dest:P, overwrite_all: bool,
 }
 
 /// Copy a directory from `source` to `dest`, creating `dest`, with minimal options.
-pub fn copy_dir<P: AsRef<Path>>(source: P, dest:P) -> Result<(), std::io::Error>{
+pub fn copy_dir<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> Result<(), std::io::Error>{
     CopyBuilder {
         source: source.as_ref().to_path_buf(),
         destination: dest.as_ref().to_path_buf(),
