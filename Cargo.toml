@@ -18,3 +18,4 @@ log = "0.4.11"
 [dev-dependencies]
 unzip = "0.1.0"
 reqwest = { version = "0.10.8", features = ["blocking"] }
+env_logger = "*"

@@ -1,3 +1,4 @@
+#![feature(test)]
 use log::*;
 use std::fs::copy;
 use std::io::{Error, ErrorKind};
