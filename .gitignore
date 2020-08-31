@@ -2,3 +2,5 @@
 Cargo.lock
 .history
 sample
+output*
+sample*

@@ -47,7 +47,6 @@ fn copy() {
 #[test]
 fn copy_cargo() {
 
-
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
     let sample_dir = "sample";
     let output_dir = format!("{}_output", sample_dir);

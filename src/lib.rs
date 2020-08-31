@@ -5,6 +5,7 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
+use rayon::prelude::*;
 
 #[cfg(test)]
 mod tests;
@@ -63,8 +64,88 @@ fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
     }
 }
 
-impl CopyBuilder {
+fn copy_file(source: &Path, options: CopyBuilder) -> Result<(), std::io::Error> {
+    let abs_source = options.source.canonicalize()?;
+    let abs_dest = options.destination.canonicalize()?;
 
+    let rel_dest = source
+        .strip_prefix(&abs_source)
+        .map_err(|e| Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e)))?;
+    let dest_entry = abs_dest.join(rel_dest);
+
+    if source.is_file() {
+        // the source exists
+
+        // Early out if target is present and overwrite is off
+        if !options.overwrite_all
+            && dest_entry.is_file()
+            && !options.overwrite_if_newer
+            && !options.overwrite_if_size_differs
+        {
+            return Ok(());
+        }
+
+        for f in &options.exclude_filters {
+            if source.to_string_lossy().contains(f) {
+                return Ok(());
+            }
+        }
+
+        for f in &options.include_filters {
+            if !source.to_string_lossy().contains(f) {
+                return Ok(());
+            }
+        }
+
+        // File is not present: copy it
+        if !dest_entry.is_file() {
+            debug!(
+                "Dest not present: CP {} DST {}",
+                source.display(),
+                dest_entry.display()
+            );
+            copy(source, dest_entry)?;
+            return Ok(());
+        }
+
+        // File newer?
+        if options.overwrite_if_newer {
+            if is_file_newer(source, &dest_entry) {
+                debug!(
+                    "Source newer: CP {} DST {}",
+                    source.display(),
+                    dest_entry.display()
+                );
+                copy(source, &dest_entry)?;
+            }
+            return Ok(());
+        }
+
+        // Different size?
+        if options.overwrite_if_size_differs {
+            if is_filesize_different(source, &dest_entry) {
+                debug!(
+                    "Source differs: CP {} DST {}",
+                    source.display(),
+                    dest_entry.display()
+                );
+                copy(source, &dest_entry)?;
+            }
+            return Ok(());
+        }
+
+        // The regular copy operation
+        debug!("CP {} DST {}", source.display(), dest_entry.display());
+        copy(source, dest_entry)?;
+    } else if source.is_dir() && !dest_entry.is_dir() {
+        debug!("MKDIR {}", source.display());
+        std::fs::create_dir_all(dest_entry)?;
+    }
+
+    Ok(())
+}
+
+impl CopyBuilder {
     /// Construct a new CopyBuilder with `source` and `dest`.
     pub fn new<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> CopyBuilder {
         CopyBuilder {
@@ -135,89 +216,38 @@ impl CopyBuilder {
             abs_source.display(),
             abs_dest.display()
         );
-
-        for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
-            let rel_dest = entry.path().strip_prefix(&abs_source).map_err(|e| {
-                Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
-            })?;
-            let dest_entry = abs_dest.join(rel_dest);
-
-            if entry.path().is_file() {
-                // the source exists
-
-                // Early out if target is present and overwrite is off
-                if !self.overwrite_all
-                    && dest_entry.is_file()
-                    && !self.overwrite_if_newer
-                    && !self.overwrite_if_size_differs
-                {
-                    continue;
-                }
-
-                for f in &self.exclude_filters {
-                    if entry.path().to_string_lossy().contains(f) {
-                        continue;
-                    }
-                }
-
-                for f in &self.include_filters {
-                    if !entry.path().to_string_lossy().contains(f) {
-                        continue;
-                    }
-                }
-
-                // File is not present: copy it
-                if !dest_entry.is_file() {
-                    debug!(
-                        "Dest not present: CP {} DST {}",
-                        entry.path().display(),
-                        dest_entry.display()
-                    );
-                    copy(entry.path(), dest_entry)?;
-                    continue;
-                }
-
-                // File newer?
-                if self.overwrite_if_newer {
-                    if is_file_newer(entry.path(), &dest_entry) {
-                        debug!(
-                            "Source newer: CP {} DST {}",
-                            entry.path().display(),
-                            dest_entry.display()
-                        );
-                        copy(entry.path(), &dest_entry)?;
-                    }
-                    continue;
-                }
-
-                // Different size?
-                if self.overwrite_if_size_differs {
-                    if is_filesize_different(entry.path(), &dest_entry) {
-                        debug!(
-                            "Source differs: CP {} DST {}",
-                            entry.path().display(),
-                            dest_entry.display()
-                        );
-                        copy(entry.path(), &dest_entry)?;
-                    }
-                    continue;
-                }
-
-                // The regular copy operation
-                debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
-                copy(entry.path(), dest_entry)?;
-            } else if entry.path().is_dir() && !dest_entry.is_dir() {
-                debug!("MKDIR {}", entry.path().display());
-                std::fs::create_dir_all(dest_entry)?;
-            }
+        for entry in WalkDir::new(&abs_source)
+            .into_iter()
+            .filter_map(|e| e.ok()) {
+            copy_file(&entry.path(), self.clone());
         }
+
+
+        // WalkDir::new(&abs_source)
+        //     .into_iter()
+        //     .filter_map(|e| e.ok())
+        //     .map(|p| p.path().to_path_buf())
+        //     .collect::<Vec<PathBuf>>()
+        //     .par_iter()
+        //     .for_each(|p| {
+        //         copy_file(&p, self.clone());
+        //     })
+        //     ;
 
         Ok(())
     }
 }
 
 /// Copy a directory from `source` to `dest`, creating `dest`, with all options.
-pub fn copy_dir_advanced<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q, overwrite_all: bool, overwrite_if_newer: bool, overwrite_if_size_differs: bool, exclude_filters: Vec<String>, include_filters: Vec<String>) -> Result<(), std::io::Error>{
+pub fn copy_dir_advanced<P: AsRef<Path>, Q: AsRef<Path>>(
+    source: P,
+    dest: Q,
+    overwrite_all: bool,
+    overwrite_if_newer: bool,
+    overwrite_if_size_differs: bool,
+    exclude_filters: Vec<String>,
+    include_filters: Vec<String>,
+) -> Result<(), std::io::Error> {
     CopyBuilder {
         source: source.as_ref().to_path_buf(),
         destination: dest.as_ref().to_path_buf(),
@@ -226,11 +256,12 @@ pub fn copy_dir_advanced<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q, ove
         overwrite_if_size_differs,
         exclude_filters,
         include_filters,
-    }.run()
+    }
+    .run()
 }
 
 /// Copy a directory from `source` to `dest`, creating `dest`, with minimal options.
-pub fn copy_dir<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> Result<(), std::io::Error>{
+pub fn copy_dir<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> Result<(), std::io::Error> {
     CopyBuilder {
         source: source.as_ref().to_path_buf(),
         destination: dest.as_ref().to_path_buf(),
@@ -239,5 +270,6 @@ pub fn copy_dir<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> Result<()
         overwrite_if_size_differs: false,
         exclude_filters: vec![],
         include_filters: vec![],
-    }.run()
+    }
+    .run()
 }
