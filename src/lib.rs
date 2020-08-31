@@ -216,23 +216,23 @@ impl CopyBuilder {
             abs_source.display(),
             abs_dest.display()
         );
-        for entry in WalkDir::new(&abs_source)
-            .into_iter()
-            .filter_map(|e| e.ok()) {
-            copy_file(&entry.path(), self.clone());
-        }
-
-
-        // WalkDir::new(&abs_source)
+        // for entry in WalkDir::new(&abs_source)
         //     .into_iter()
-        //     .filter_map(|e| e.ok())
-        //     .map(|p| p.path().to_path_buf())
-        //     .collect::<Vec<PathBuf>>()
-        //     .par_iter()
-        //     .for_each(|p| {
-        //         copy_file(&p, self.clone());
-        //     })
-        //     ;
+        //     .filter_map(|e| e.ok()) {
+        //     copy_file(&entry.path(), self.clone());
+        // }
+
+
+        WalkDir::new(&abs_source)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .map(|p| p.path().to_path_buf())
+            .collect::<Vec<PathBuf>>()
+            .par_iter()
+            .for_each(|p| {
+                copy_file(&p, self.clone());
+            })
+            ;
 
         Ok(())
     }
