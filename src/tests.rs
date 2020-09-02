@@ -1,12 +1,8 @@
 use super::*;
 use std::fs::create_dir_all;
 use std::fs::File;
-use test::Bencher;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-extern crate test;
-use env_logger;
-
 
 #[test]
 fn copy() {
@@ -48,7 +44,7 @@ fn copy() {
 fn copy_cargo() {
 
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
-    let sample_dir = "sample";
+    let sample_dir = "cargo";
     let output_dir = format!("{}_output", sample_dir);
     let archive = format!("{}.zip", sample_dir);
 
@@ -83,51 +79,3 @@ fn copy_cargo() {
     std::fs::remove_file(archive).unwrap();
 }
 
-#[bench]
-fn bench_rustlang_copy(_: &mut Bencher) {
-    std::env::set_var("RUST_LOG", "INFO");
-
-    let _ = env_logger::builder()
-        // .is_test(true)
-        .try_init();
-
-    let url = "https://github.com/rust-lang/rust/archive/master.zip";
-    let sample_dir = "sample";
-    //let output_dir = format!("{}_output", sample_dir);
-    let archive = format!("{}.zip", sample_dir);
-
-    info!("Downloading {:?}", url);
-
-    let mut resp = reqwest::blocking::get(url).unwrap();
-    let mut out = File::create(&archive).expect("failed to create file");
-    std::io::copy(&mut resp, &mut out).expect("failed to copy content");
-    info!("Unzipping...");
-
-    let reader = std::fs::File::open(&archive).unwrap();
-    unzip::Unzipper::new(reader, sample_dir).unzip().unwrap();
-    
-    let iterations = 5;
-
-    for i in 0..iterations {
-        info!("Copy bench {}", i);
-        let start = std::time::Instant::now();
-        
-        CopyBuilder::new(
-            &Path::new(sample_dir).canonicalize().unwrap(),
-            &format!("output_{}", i),
-        )
-        .run()
-        .unwrap();
-    
-        info!("Elapsed time: {:?}", start.elapsed());
-    }
-    
-    info!("Cleanup");
-    std::fs::remove_dir_all(sample_dir).unwrap();
-    std::fs::remove_file(archive).unwrap();
-    for i in 0..iterations {
-        std::fs::remove_dir_all(&format!("output_{}", i)).unwrap();
-    }
-    info!("Done");
-
-}
