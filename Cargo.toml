@@ -14,6 +14,7 @@ keywords = ["copy", "recursive", "filesystem", "file"]
 walkdir = "2.3.1"
 log = "0.4.11"
 rayon = "1.4.0"
+jwalk = "0.5"
 
 [dev-dependencies]
 unzip = "0.1.0"

@@ -1,10 +1,11 @@
 use log::*;
+use rayon::prelude::*;
 use std::fs::copy;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
-use rayon::prelude::*;
+use jwalk::WalkDir as ParWalk;
 
 #[cfg(test)]
 mod tests;
@@ -201,6 +202,98 @@ impl CopyBuilder {
             ..self
         }
     }
+    /// Execute the copy operation
+    pub fn run_single(&self) -> Result<(), std::io::Error> {
+        if !self.destination.is_dir() {
+            debug!("MKDIR {:?}", &self.destination);
+            std::fs::create_dir_all(&self.destination)?;
+        }
+        let abs_source = self.source.canonicalize()?;
+        let abs_dest = self.destination.canonicalize()?;
+        debug!(
+            "Building copy operation: SRC {} DST {}",
+            abs_source.display(),
+            abs_dest.display()
+        );
+
+        for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
+            let rel_dest = entry.path().strip_prefix(&abs_source).map_err(|e| {
+                Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
+            })?;
+            let dest_entry = abs_dest.join(rel_dest);
+
+            if entry.path().is_file() {
+                // the source exists
+
+                // Early out if target is present and overwrite is off
+                if !self.overwrite_all
+                    && dest_entry.is_file()
+                    && !self.overwrite_if_newer
+                    && !self.overwrite_if_size_differs
+                {
+                    continue;
+                }
+
+                for f in &self.exclude_filters {
+                    if entry.path().to_string_lossy().contains(f) {
+                        continue;
+                    }
+                }
+
+                for f in &self.include_filters {
+                    if !entry.path().to_string_lossy().contains(f) {
+                        continue;
+                    }
+                }
+
+                // File is not present: copy it
+                if !dest_entry.is_file() {
+                    debug!(
+                        "Dest not present: CP {} DST {}",
+                        entry.path().display(),
+                        dest_entry.display()
+                    );
+                    copy(entry.path(), dest_entry)?;
+                    continue;
+                }
+
+                // File newer?
+                if self.overwrite_if_newer {
+                    if is_file_newer(entry.path(), &dest_entry) {
+                        debug!(
+                            "Source newer: CP {} DST {}",
+                            entry.path().display(),
+                            dest_entry.display()
+                        );
+                        copy(entry.path(), &dest_entry)?;
+                    }
+                    continue;
+                }
+
+                // Different size?
+                if self.overwrite_if_size_differs {
+                    if is_filesize_different(entry.path(), &dest_entry) {
+                        debug!(
+                            "Source differs: CP {} DST {}",
+                            entry.path().display(),
+                            dest_entry.display()
+                        );
+                        copy(entry.path(), &dest_entry)?;
+                    }
+                    continue;
+                }
+
+                // The regular copy operation
+                debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
+                copy(entry.path(), dest_entry)?;
+            } else if entry.path().is_dir() && !dest_entry.is_dir() {
+                debug!("MKDIR {}", entry.path().display());
+                std::fs::create_dir_all(dest_entry)?;
+            }
+        }
+
+        Ok(())
+    }
 
     /// Execute the copy operation
     pub fn run(&self) -> Result<(), std::io::Error> {
@@ -215,12 +308,9 @@ impl CopyBuilder {
             abs_source.display(),
             abs_dest.display()
         );
-        for entry in WalkDir::new(&abs_source)
-            .into_iter()
-            .filter_map(|e| e.ok()) {
-            copy_file(&entry.path(), self.clone());
-        }
-
+        // for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
+        //     copy_file(&entry.path(), self.clone());
+        // }
 
         // WalkDir::new(&abs_source)
         //     .into_iter()
@@ -232,6 +322,13 @@ impl CopyBuilder {
         //         copy_file(&p, self.clone());
         //     })
         //     ;
+
+            for entry in ParWalk::new(&abs_source) {
+                // println!("{}", entry?.path().display());
+                copy_file(&entry?.path(), self.clone());
+
+              }
+
 
         Ok(())
     }

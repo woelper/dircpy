@@ -17,14 +17,11 @@ fn copy() {
             .unwrap();
     }
 
-    CopyBuilder::new(
-        "source",
-        "dest",
-    )
-    .overwrite(true)
-    .overwrite_if_newer(true)
-    .run()
-    .unwrap();
+    CopyBuilder::new("source", "dest")
+        .overwrite(true)
+        .overwrite_if_newer(true)
+        .run()
+        .unwrap();
 
     #[cfg(unix)]
     {
@@ -42,7 +39,6 @@ fn copy() {
 
 #[test]
 fn copy_cargo() {
-
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
     let sample_dir = "cargo";
     let output_dir = format!("{}_output", sample_dir);
@@ -78,4 +74,3 @@ fn copy_cargo() {
     std::fs::remove_dir_all(output_dir).unwrap();
     std::fs::remove_file(archive).unwrap();
 }
-
