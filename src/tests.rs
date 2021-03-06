@@ -49,9 +49,10 @@ fn copy_cargo() {
 
 
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
-    let sample_dir = "sample";
+    let sample_dir = "cargo";
     let output_dir = format!("{}_output", sample_dir);
     let archive = format!("{}.zip", sample_dir);
+    println!("Expanding {}", archive);
 
     let mut resp = reqwest::blocking::get(url).unwrap();
     let mut out = File::create(&archive).expect("failed to create file");
@@ -59,7 +60,7 @@ fn copy_cargo() {
 
     let reader = std::fs::File::open(&archive).unwrap();
 
-    unzip::Unzipper::new(reader, sample_dir).unzip().unwrap();
+    unzip::Unzipper::new(reader, sample_dir).unzip().expect("Could not expand cargo sources");
     let num_input_files = WalkDir::new(&sample_dir)
         .into_iter()
         .filter_map(|e| e.ok())
