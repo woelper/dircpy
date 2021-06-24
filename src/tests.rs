@@ -38,6 +38,62 @@ fn copy() {
 }
 
 #[test]
+fn copy_exclude() {
+    std::env::set_var("RUST_LOG", "DEBUG");
+    let _ = env_logger::builder().try_init();
+
+    let src = "ex_src";
+    let dst = "ex_dest";
+
+    create_dir_all(src).unwrap();
+    File::create(format!("{}/foo", src)).unwrap();
+    File::create(format!("{}/bar", src)).unwrap();
+
+    CopyBuilder::new(src, dst)
+        .overwrite(true)
+        .overwrite_if_newer(true)
+        .with_exclude_filter("foo")
+        .run()
+        .unwrap();
+
+    assert!(!Path::new(&format!("{}/foo", dst)).is_file());
+
+    // clean up
+    std::fs::remove_dir_all(src).unwrap();
+    std::fs::remove_dir_all(dst).unwrap();
+}
+
+
+#[test]
+fn copy_include() {
+    std::env::set_var("RUST_LOG", "DEBUG");
+    let _ = env_logger::builder().try_init();
+
+    let src = "in_src";
+    let dst = "in_dest";
+
+    create_dir_all(src).unwrap();
+    File::create(format!("{}/foo", src)).unwrap();
+    File::create(format!("{}/bar", src)).unwrap();
+
+    CopyBuilder::new(src, dst)
+        .overwrite(true)
+        .overwrite_if_newer(true)
+        .with_include_filter("foo")
+        .run()
+        .unwrap();
+
+    assert!(Path::new(&format!("{}/foo", dst)).is_file());
+    assert!(!Path::new(&format!("{}/bar", dst)).is_file());
+
+    // clean up
+    std::fs::remove_dir_all(src).unwrap();
+    std::fs::remove_dir_all(dst).unwrap();
+}
+
+
+
+#[test]
 fn copy_cargo() {
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
     let sample_dir = "cargo";

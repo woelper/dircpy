@@ -5,7 +5,6 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
-// use jwalk::WalkDir as ParWalk;
 
 #[cfg(test)]
 mod tests;
@@ -195,7 +194,7 @@ impl CopyBuilder {
 
     /// Only copy files that contain this string.
     pub fn with_include_filter(self, f: &str) -> CopyBuilder {
-        let mut filters = self.exclude_filters.clone();
+        let mut filters = self.include_filters.clone();
         filters.push(f.to_owned());
         CopyBuilder {
             include_filters: filters,
@@ -216,7 +215,7 @@ impl CopyBuilder {
             abs_dest.display()
         );
 
-        for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
+        'files: for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
             let rel_dest = entry.path().strip_prefix(&abs_source).map_err(|e| {
                 Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
             })?;
@@ -235,14 +234,16 @@ impl CopyBuilder {
                 }
 
                 for f in &self.exclude_filters {
+                    debug!("EXCL {} for {:?}", f, entry);
+
                     if entry.path().to_string_lossy().contains(f) {
-                        continue;
+                        continue 'files;
                     }
                 }
 
                 for f in &self.include_filters {
                     if !entry.path().to_string_lossy().contains(f) {
-                        continue;
+                        continue 'files;
                     }
                 }
 
