@@ -1,3 +1,25 @@
+//! Recursively copy a directory from a to b.
+//! ```
+//! use dircpy::*;
+//!
+//! // Most basic example:
+//! copy_dir("src", "dest").unwrap();
+//!
+//! // Simple builder example:
+//!CopyBuilder::new("src", "dest")
+//!.run()
+//!.unwrap();
+//!
+//! // Copy recursively, only including certain files:
+//!CopyBuilder::new("src", "dest")
+//!.overwrite_if_newer(true)
+//!.overwrite_if_size_differs(true)
+//!.with_include_filter(".txt")
+//!.with_include_filter(".csv")
+//!.run()
+//!.unwrap();
+//! ```
+
 use log::*;
 // use rayon::prelude::*;
 use std::fs::copy;
@@ -310,7 +332,7 @@ impl CopyBuilder {
             abs_dest.display()
         );
         for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
-            copy_file(&entry.path(), self.clone());
+            let _ = copy_file(entry.path(), self.clone());
         }
 
         // WalkDir::new(&abs_source)
@@ -329,7 +351,6 @@ impl CopyBuilder {
         //     copy_file(&entry?.path(), self.clone());
 
         //   }
-
 
         Ok(())
     }

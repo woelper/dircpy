@@ -25,12 +25,13 @@ fn download_and_unpack(url: &str, name: &str) {
         std::io::copy(&mut resp, &mut out).expect("failed to copy content");
     } else {
         info!("Did not download, archive already present");
-
     }
 
     info!("Unzipping...");
 
-    Unzipper::new(File::open(&archive).unwrap(), name).unzip().unwrap();
+    Unzipper::new(File::open(&archive).unwrap(), name)
+        .unzip()
+        .unwrap();
     info!("Done. Ready.");
 }
 
@@ -107,7 +108,7 @@ fn test_cpy_single(c: &mut Criterion) {
             // Measured code goes here
             CopyBuilder::new(&SOURCE, &format!("{}{}", DEST, random_string()))
                 .overwrite(true)
-                .run_single()
+                .run()
                 .unwrap();
         });
     });
@@ -144,7 +145,7 @@ criterion_group! {
     // This can be any expression that returns a `Criterion` object.
     config = Criterion::default()
     .sample_size(10)
-    .sampling_mode()
+    // .sampling_mode()
     .warm_up_time(std::time::Duration::from_secs(2))
     .measurement_time(std::time::Duration::from_secs(3))
     ;

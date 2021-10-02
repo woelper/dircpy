@@ -63,7 +63,6 @@ fn copy_exclude() {
     std::fs::remove_dir_all(dst).unwrap();
 }
 
-
 #[test]
 fn copy_include() {
     std::env::set_var("RUST_LOG", "DEBUG");
@@ -91,8 +90,6 @@ fn copy_include() {
     std::fs::remove_dir_all(dst).unwrap();
 }
 
-
-
 #[test]
 fn copy_cargo() {
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
@@ -107,7 +104,9 @@ fn copy_cargo() {
 
     let reader = std::fs::File::open(&archive).unwrap();
 
-    unzip::Unzipper::new(reader, sample_dir).unzip().expect("Could not expand cargo sources");
+    unzip::Unzipper::new(reader, sample_dir)
+        .unzip()
+        .expect("Could not expand cargo sources");
     let num_input_files = WalkDir::new(&sample_dir)
         .into_iter()
         .filter_map(|e| e.ok())
