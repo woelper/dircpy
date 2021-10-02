@@ -57,12 +57,17 @@ mod tests;
 pub struct CopyBuilder {
     /// The source directory
     pub source: PathBuf,
-    /// the destination directory
+    /// The destination directory
     pub destination: PathBuf,
+    /// Overwrite all files in target, if already existing
     overwrite_all: bool,
+    /// Overwrite target files if they are newer
     overwrite_if_newer: bool,
+    /// Overwrite target files if they differ in size
     overwrite_if_size_differs: bool,
+    /// A list of include filters
     exclude_filters: Vec<String>,
+    /// A list of exclude filters
     include_filters: Vec<String>,
 }
 
