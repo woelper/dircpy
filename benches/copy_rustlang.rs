@@ -38,7 +38,7 @@ fn download_and_unpack(url: &str, name: &str) {
 fn setup(_: &mut Criterion) {
     std::env::set_var("RUST_LOG", "INFO");
     let _ = env_logger::builder().try_init();
-    std::fs::create_dir_all(SOURCE);
+    std::fs::create_dir_all(SOURCE).unwrap();
     download_and_unpack(SAMPLE_DATA, SOURCE);
 }
 
@@ -46,10 +46,6 @@ fn teardown(_: &mut Criterion) {
     std::env::set_var("RUST_LOG", "INFO");
     let _ = env_logger::builder().try_init();
     // One-time setup code goes here
-    let source = "rustlang";
-    let dest = "test";
-    let archive = format!("{}.zip", source);
-
     info!("CLEANUP");
     // let _ = std::fs::remove_dir_all(source);
     let _ = std::fs::remove_dir_all(DEST);
@@ -61,8 +57,6 @@ fn test_cp(c: &mut Criterion) {
     std::env::set_var("RUST_LOG", "INFO");
     let _ = env_logger::builder().try_init();
     // One-time setup code goes here
-    let source = "rustlang";
-    let dest = "test";
     c.bench_function("cp -r", |b| {
         // Per-sample (note that a sample can be many iterations) setup goes here
         b.iter(|| {
@@ -71,35 +65,13 @@ fn test_cp(c: &mut Criterion) {
                 .arg("-r")
                 .arg(SOURCE)
                 .arg(&format!("{}{}", DEST, random_string()))
-                .output();
+                .output().unwrap();
         });
     });
 }
 
-fn test_cpy(c: &mut Criterion) {
-    std::env::set_var("RUST_LOG", "INFO");
-    let _ = env_logger::builder().try_init();
-    // One-time setup code goes here
-    let source = "rustlang";
-    let dest = "test";
-    c.bench_function("cpy", |b| {
-        // Per-sample (note that a sample can be many iterations) setup goes here
-        b.iter(|| {
-            // Measured code goes here
-            CopyBuilder::new(&SOURCE, &format!("{}{}", DEST, random_string()))
-                .overwrite(true)
-                .run()
-                .unwrap();
-        });
-    });
 
-    // std::fs::remove_dir_all(source).unwrap();
-    // std::fs::remove_dir_all(dest);
-}
-
-fn test_cpy_single(c: &mut Criterion) {
-    // std::env::set_var("RUST_LOG", "INFO");
-    // let _ = env_logger::builder().try_init();
+fn test_dircpy_single(c: &mut Criterion) {
     // One-time setup code goes here
     // download_and_unpack(SAMPLE_DATA, source);
     c.bench_function("cpy single threaded", |b| {
@@ -112,17 +84,26 @@ fn test_cpy_single(c: &mut Criterion) {
                 .unwrap();
         });
     });
+}
 
-    // std::fs::remove_dir_all(source).unwrap();
-    // std::fs::remove_dir_all(dest);
+fn test_dircpy_parallel(c: &mut Criterion) {
+    // One-time setup code goes here
+    c.bench_function("cpy multi-threaded", |b| {
+        // Per-sample (note that a sample can be many iterations) setup goes here
+        b.iter(|| {
+            // Measured code goes here
+            CopyBuilder::new(&SOURCE, &format!("{}{}", DEST, random_string()))
+                .overwrite(true)
+                .run_par()
+                .unwrap();
+        });
+    });
 }
 
 fn test_lms(c: &mut Criterion) {
     std::env::set_var("RUST_LOG", "INFO");
     let _ = env_logger::builder().try_init();
     // One-time setup code goes here
-    let source = "rustlang";
-    let dest = "test";
     // download_and_unpack(SAMPLE_DATA, source);
     c.bench_function("lms", |b| {
         // Per-sample (note that a sample can be many iterations) setup goes here
@@ -132,12 +113,9 @@ fn test_lms(c: &mut Criterion) {
                 .arg("cp")
                 .arg(SOURCE)
                 .arg(&format!("{}{}", DEST, random_string()))
-                .output();
+                .output().unwrap();
         });
     });
-
-    // std::fs::remove_dir_all(source).unwrap();
-    // std::fs::remove_dir_all(dest);
 }
 
 criterion_group! {
@@ -149,6 +127,6 @@ criterion_group! {
     .warm_up_time(std::time::Duration::from_secs(2))
     .measurement_time(std::time::Duration::from_secs(3))
     ;
-    targets = setup, test_cpy_single, test_cpy, test_cp, test_lms, teardown
+    targets = setup, test_dircpy_single, test_dircpy_parallel, test_cp, test_lms, teardown
 }
 criterion_main!(benches);
