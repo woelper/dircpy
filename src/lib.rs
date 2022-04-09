@@ -27,6 +27,7 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
+use jwalk::WalkDir as JWalkDir;
 
 #[cfg(test)]
 mod tests;
@@ -323,7 +324,8 @@ impl CopyBuilder {
         Ok(())
     }
 
-    /// Execute the copy operation
+    /// Execute the copy operation in parallel. The usage of this function is discouraged
+    /// until proven to work faster.
     pub fn run_par(&self) -> Result<(), std::io::Error> {
         if !self.destination.is_dir() {
             debug!("MKDIR {:?}", &self.destination);
@@ -336,26 +338,10 @@ impl CopyBuilder {
             abs_source.display(),
             abs_dest.display()
         );
-        for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
-            let _ = copy_file(entry.path(), self.clone());
+        for entry in JWalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
+            let _ = copy_file(&entry.path(), self.clone());
         }
 
-        // WalkDir::new(&abs_source)
-        //     .into_iter()
-        //     .filter_map(|e| e.ok())
-        //     .map(|p| p.path().to_path_buf())
-        //     .collect::<Vec<PathBuf>>()
-        //     .par_iter()
-        //     .for_each(|p| {
-        //         copy_file(&p, self.clone());
-        //     })
-        //     ;
-
-        // for entry in ParWalk::new(&abs_source) {
-        //     // println!("{}", entry?.path().display());
-        //     copy_file(&entry?.path(), self.clone());
-
-        //   }
 
         Ok(())
     }
