@@ -27,6 +27,7 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
+#[cfg(feature = "jwalk")]
 use jwalk::WalkDir as JWalkDir;
 
 #[cfg(test)]
@@ -91,6 +92,7 @@ fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
     }
 }
 
+#[cfg(feature = "jwalk")]
 fn copy_file(source: &Path, options: CopyBuilder) -> Result<(), std::io::Error> {
     let abs_source = options.source.canonicalize()?;
     let abs_dest = options.destination.canonicalize()?;
@@ -326,6 +328,7 @@ impl CopyBuilder {
 
     /// Execute the copy operation in parallel. The usage of this function is discouraged
     /// until proven to work faster.
+    #[cfg(feature = "jwalk")]
     pub fn run_par(&self) -> Result<(), std::io::Error> {
         if !self.destination.is_dir() {
             debug!("MKDIR {:?}", &self.destination);
