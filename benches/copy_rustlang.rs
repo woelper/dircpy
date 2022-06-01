@@ -88,6 +88,7 @@ fn test_dircpy_single(c: &mut Criterion) {
 
 fn test_dircpy_parallel(c: &mut Criterion) {
     // One-time setup code goes here
+    #[cfg(feature = "jwalk")]
     c.bench_function("cpy multi-threaded", |b| {
         // Per-sample (note that a sample can be many iterations) setup goes here
         b.iter(|| {
