@@ -22,7 +22,7 @@
 
 use log::*;
 // use rayon::prelude::*;
-use std::fs::copy;
+use std::fs::{copy, read_link};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -75,7 +75,7 @@ pub struct CopyBuilder {
 
 /// Determine if the modification date of file_a is newer than that of file_b
 fn is_file_newer(file_a: &Path, file_b: &Path) -> bool {
-    match (file_a.metadata(), file_b.metadata()) {
+    match (file_a.symlink_metadata(), file_b.symlink_metadata()) {
         (Ok(meta_a), Ok(meta_b)) => {
             meta_a.modified().unwrap_or_else(|_| SystemTime::now())
                 > meta_b.modified().unwrap_or(SystemTime::UNIX_EPOCH)
@@ -86,7 +86,7 @@ fn is_file_newer(file_a: &Path, file_b: &Path) -> bool {
 
 /// Determine if file_a and file_b's size differs.
 fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
-    match (file_a.metadata(), file_b.metadata()) {
+    match (file_a.symlink_metadata(), file_b.symlink_metadata()) {
         (Ok(meta_a), Ok(meta_b)) => meta_a.len() != meta_b.len(),
         _ => false,
     }
@@ -251,12 +251,12 @@ impl CopyBuilder {
             })?;
             let dest_entry = abs_dest.join(rel_dest);
 
-            if entry.path().is_file() {
-                // the source exists
+            if entry.path().symlink_metadata().is_ok() && !entry.file_type().is_dir() {
+                // the source exists, but isn't a directory
 
                 // Early out if target is present and overwrite is off
                 if !self.overwrite_all
-                    && dest_entry.is_file()
+                    && dest_entry.symlink_metadata().is_ok()
                     && !self.overwrite_if_newer
                     && !self.overwrite_if_size_differs
                 {
@@ -277,46 +277,62 @@ impl CopyBuilder {
                     }
                 }
 
-                // File is not present: copy it
-                if !dest_entry.is_file() {
+                // File is not present: copy it in any case
+                let dest_exists = dest_entry.symlink_metadata().is_ok();
+
+                if !dest_exists {
                     debug!(
                         "Dest not present: CP {} DST {}",
                         entry.path().display(),
                         dest_entry.display()
                     );
-                    copy(entry.path(), dest_entry)?;
-                    continue;
                 }
 
                 // File newer?
-                if self.overwrite_if_newer {
+                if dest_exists && self.overwrite_if_newer {
                     if is_file_newer(entry.path(), &dest_entry) {
                         debug!(
                             "Source newer: CP {} DST {}",
                             entry.path().display(),
                             dest_entry.display()
                         );
-                        copy(entry.path(), &dest_entry)?;
+                    } else {
+                        continue;
                     }
-                    continue;
                 }
 
                 // Different size?
-                if self.overwrite_if_size_differs {
+                if dest_exists && self.overwrite_if_size_differs {
                     if is_filesize_different(entry.path(), &dest_entry) {
                         debug!(
                             "Source differs: CP {} DST {}",
                             entry.path().display(),
                             dest_entry.display()
                         );
-                        copy(entry.path(), &dest_entry)?;
+                    } else {
+                        continue;
                     }
-                    continue;
                 }
 
-                // The regular copy operation
-                debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
-                copy(entry.path(), dest_entry)?;
+                if entry.file_type().is_file() {
+                    // The regular copy operation
+                    debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
+                    copy(entry.path(), dest_entry)?;
+                } else if entry.file_type().is_symlink() {
+                    debug!(
+                        "CP LNK {} DST {}",
+                        entry.path().display(),
+                        dest_entry.display()
+                    );
+                    let target = read_link(entry.path())?;
+                    std::os::unix::fs::symlink(target, dest_entry)?
+                } else {
+                    unimplemented!(
+                        "File {} has unhandled type {:?}",
+                        entry.path().display(),
+                        entry.file_type()
+                    );
+                }
             } else if entry.path().is_dir() && !dest_entry.is_dir() {
                 debug!("MKDIR {}", entry.path().display());
                 std::fs::create_dir_all(dest_entry)?;
@@ -344,7 +360,6 @@ impl CopyBuilder {
         for entry in JWalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
             let _ = copy_file(&entry.path(), self.clone());
         }
-
 
         Ok(())
     }
