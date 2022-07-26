@@ -2,7 +2,7 @@ use super::*;
 use std::fs::create_dir_all;
 use std::fs::File;
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
 
 #[test]
 fn copy() {
@@ -15,6 +15,8 @@ fn copy() {
         File::create("source/exec_file").unwrap();
         std::fs::set_permissions("source/exec_file", std::fs::Permissions::from_mode(0o755))
             .unwrap();
+        symlink("exec_file", "source/symlink").unwrap();
+        symlink("does_not_exist", "source/dangling_symlink").unwrap();
     }
 
     CopyBuilder::new("source", "dest")
@@ -30,6 +32,14 @@ fn copy() {
         let permissions = metadata.permissions();
         println!("permissions: {:o}", permissions.mode());
         assert_eq!(permissions.mode(), 33261);
+        assert_eq!(
+            Path::new("exec_file"),
+            read_link("dest/symlink").unwrap().as_path()
+        );
+        assert_eq!(
+            Path::new("does_not_exist"),
+            read_link("dest/dangling_symlink").unwrap().as_path()
+        );
     }
 
     // clean up
