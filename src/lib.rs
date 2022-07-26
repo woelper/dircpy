@@ -22,13 +22,13 @@
 
 use log::*;
 // use rayon::prelude::*;
+#[cfg(feature = "jwalk")]
+use jwalk::WalkDir as JWalkDir;
 use std::fs::{copy, read_link};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
-#[cfg(feature = "jwalk")]
-use jwalk::WalkDir as JWalkDir;
 
 #[cfg(test)]
 mod tests;
@@ -357,7 +357,10 @@ impl CopyBuilder {
             abs_source.display(),
             abs_dest.display()
         );
-        for entry in JWalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
+        for entry in JWalkDir::new(&abs_source)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let _ = copy_file(&entry.path(), self.clone());
         }
 

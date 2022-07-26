@@ -5,7 +5,7 @@ use std::fs::File;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
 #[test]
-fn copy() {
+fn copy_basic() {
     create_dir_all("source/level1/level2/level3").unwrap();
     File::create("source/test").unwrap();
     File::create("source/level1/other_file").unwrap();
