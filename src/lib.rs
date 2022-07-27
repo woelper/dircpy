@@ -325,6 +325,7 @@ impl CopyBuilder {
                         dest_entry.display()
                     );
                     let target = read_link(entry.path())?;
+                    #[cfg(unix)]
                     std::os::unix::fs::symlink(target, dest_entry)?
                 } else {
                     unimplemented!(
