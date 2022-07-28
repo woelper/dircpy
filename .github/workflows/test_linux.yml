@@ -1,11 +1,11 @@
 on: [push]
 
-name: cargo check windows
+name: Test Linux
 
 jobs:
   check:
-    name: Check Windows
-    runs-on: windows-latest
+    name: Test ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - name: Run cargo check
