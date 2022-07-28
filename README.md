@@ -2,8 +2,12 @@
 [![Crates.io](https://img.shields.io/crates/v/dircpy.svg)](https://crates.io/crates/dircpy)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/woelper/dircpy/blob/master/LICENSE)
 [![Docs Status](https://docs.rs/dircpy/badge.svg)](https://docs.rs/dircpy)
-[![build](https://github.com/woelper/dircpy/actions/workflows/rust.yml/badge.svg)](https://github.com/woelper/dircpy/actions/workflows/rust.yml)
-A library to recursively copy directories, with some convenience added.
+
+
+[![Test Linux](https://github.com/woelper/dircpy/actions/workflows/test_linux.yml/badge.svg)](https://github.com/woelper/dircpy/actions/workflows/test_linux.yml)
+[![Test Windows](https://github.com/woelper/dircpy/actions/workflows/test_windows.yml/badge.svg)](https://github.com/woelper/dircpy/actions/workflows/test_windows.yml)
+
+A cross-platform library to recursively copy directories, with some convenience added.
 
 
 ```rust
