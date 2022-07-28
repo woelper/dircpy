@@ -12,3 +12,12 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
+      - name: GitHub Checks
+      - uses: LouisBrunner/checks-action@v1.2.0
+        if: always()
+          with:
+            token: ${{ secrets.GITHUB_TOKEN }}
+            name: Test XYZ
+            conclusion: ${{ job.status }}
+            output: |
+              {"summary":${{ steps.test.outputs.summary }}}
