@@ -3,6 +3,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/woelper/dircpy/blob/master/LICENSE)
 [![Docs Status](https://docs.rs/dircpy/badge.svg)](https://docs.rs/dircpy)
 
+![Crates.io](https://img.shields.io/crates/d/dircpy?label=crates.io%20downloads)
 
 [![Test Linux](https://github.com/woelper/dircpy/actions/workflows/test_linux.yml/badge.svg)](https://github.com/woelper/dircpy/actions/workflows/test_linux.yml)
 [![Test Windows](https://github.com/woelper/dircpy/actions/workflows/test_windows.yml/badge.svg)](https://github.com/woelper/dircpy/actions/workflows/test_windows.yml)
