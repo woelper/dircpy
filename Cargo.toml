@@ -1,6 +1,6 @@
 [package]
 name = "dircpy"
-version = "0.3.14"
+version = "0.3.15"
 authors = ["Johann Woelper <woelper@gmail.com>"]
 edition = "2018"
 license = "MIT"
