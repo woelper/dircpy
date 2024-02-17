@@ -245,7 +245,11 @@ impl CopyBuilder {
             abs_dest.display()
         );
 
-        'files: for entry in WalkDir::new(&abs_source).into_iter().filter_map(|e| e.ok()) {
+        'files: for entry in WalkDir::new(&abs_source)
+            .into_iter()
+            .filter_entry(|e| e.path() != abs_dest)
+            .filter_map(|e| e.ok())
+        {
             let rel_dest = entry.path().strip_prefix(&abs_source).map_err(|e| {
                 Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
             })?;

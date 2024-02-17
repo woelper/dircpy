@@ -47,6 +47,26 @@ fn copy_basic() {
     std::fs::remove_dir_all("dest").unwrap();
 }
 
+
+#[test]
+fn copy_subdir() {
+    std::env::set_var("RUST_LOG", "debug");
+    let _ = env_logger::try_init();
+    create_dir_all("source/subdir").unwrap();
+    create_dir_all("source/this_should_copy").unwrap();
+    File::create("source/this_should_copy/file.doc").unwrap();
+    File::create("source/a.jpg").unwrap();
+    File::create("source/b.jpg").unwrap();
+    File::create("source/d.txt").unwrap();
+
+    CopyBuilder::new("source", "source/subdir")
+    .run()
+    .unwrap();
+
+    // std::fs::remove_dir_all("source").unwrap();
+}
+
+
 #[test]
 fn copy_exclude() {
     std::env::set_var("RUST_LOG", "DEBUG");
