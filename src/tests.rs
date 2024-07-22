@@ -104,16 +104,19 @@ fn copy_include() {
     create_dir_all(src).unwrap();
     File::create(format!("{}/foo", src)).unwrap();
     File::create(format!("{}/bar", src)).unwrap();
+    File::create(format!("{}/baz", src)).unwrap();
 
     CopyBuilder::new(src, dst)
         .overwrite(true)
         .overwrite_if_newer(true)
         .with_include_filter("foo")
+        .with_include_filter("baz")
         .run()
         .unwrap();
 
     assert!(Path::new(&format!("{}/foo", dst)).is_file());
-    assert!(!Path::new(&format!("{}/bar", dst)).is_file());
+    assert!(!Path::new(&format!("{}/bar", dst)).exists());
+    assert!(Path::new(&format!("{}/baz", dst)).exists());
 
     // clean up
     std::fs::remove_dir_all(src).unwrap();
