@@ -284,7 +284,7 @@ impl CopyBuilder {
                     }
                 }
 
-                if !include_filter_found {
+                if !include_filter_found && !self.include_filters.is_empty() {
                     continue 'files;
                 }
 
