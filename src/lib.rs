@@ -275,10 +275,12 @@ impl CopyBuilder {
                     }
                 }
 
-                for f in &self.include_filters {
-                    if !entry.path().to_string_lossy().contains(f) {
-                        continue 'files;
-                    }
+                if !self
+                    .include_filters
+                    .iter()
+                    .any(|f| entry.path().to_string_lossy().contains(f))
+                {
+                    continue 'files;
                 }
 
                 // File is not present: copy it in any case
