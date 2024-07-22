@@ -275,16 +275,11 @@ impl CopyBuilder {
                     }
                 }
 
-                let mut include_filter_found = false;
-
-                for f in &self.include_filters {
-                    if entry.path().to_string_lossy().contains(f) {
-                        include_filter_found = true;
-                        break;
-                    }
-                }
-
-                if !include_filter_found && !self.include_filters.is_empty() {
+                if !self
+                    .include_filters
+                    .iter()
+                    .any(|f| entry.path().to_string_lossy().contains(f))
+                {
                     continue 'files;
                 }
 
