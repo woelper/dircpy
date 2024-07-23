@@ -1,6 +1,6 @@
 [package]
 name = "dircpy"
-version = "0.3.17"
+version = "0.3.18"
 authors = ["Johann Woelper <woelper@gmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -14,14 +14,14 @@ keywords = ["copy", "recursive", "filesystem", "file"]
 default = ["jwalk"]
 
 [dependencies]
-walkdir = "2.4"
+walkdir = "2.5"
 log = "0.4"
 # rayon = "1.4.0"
 jwalk = { version = "0.8", optional = true }
 
 [dev-dependencies]
 unzip = "0.1"
-reqwest = { version = "0.11", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking"] }
 env_logger = "0.11"
 criterion = "0.5"
 
