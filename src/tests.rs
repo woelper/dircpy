@@ -6,20 +6,30 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 
 #[test]
 fn copy_basic() {
-    create_dir_all("source/level1/level2/level3").unwrap();
-    File::create("source/test").unwrap();
-    File::create("source/level1/other_file").unwrap();
+    std::env::set_var("RUST_LOG", "DEBUG");
+    let _ = env_logger::builder().try_init();
+
+    let src = "basic_src";
+    let dst = "basic_dest";
+
+    create_dir_all(format!("{src}/level1/level2/level3")).unwrap();
+
+    File::create(format!("{src}/test")).unwrap();
+    File::create(format!("{src}/level1/other_file")).unwrap();
 
     #[cfg(unix)]
     {
-        File::create("source/exec_file").unwrap();
-        std::fs::set_permissions("source/exec_file", std::fs::Permissions::from_mode(0o755))
-            .unwrap();
-        symlink("exec_file", "source/symlink").unwrap();
-        symlink("does_not_exist", "source/dangling_symlink").unwrap();
+        File::create(format!("{src}/exec_file")).unwrap();
+        std::fs::set_permissions(
+            format!("{src}/exec_file"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        symlink("exec_file", format!("{src}/symlink")).unwrap();
+        symlink("does_not_exist", format!("{src}/dangling_symlink")).unwrap();
     }
 
-    CopyBuilder::new("source", "dest")
+    CopyBuilder::new(src, dst)
         .overwrite(true)
         .overwrite_if_newer(true)
         .run()
@@ -27,26 +37,27 @@ fn copy_basic() {
 
     #[cfg(unix)]
     {
-        let f = File::open("dest/exec_file").unwrap();
+        let f = File::open(format!("{dst}/exec_file")).unwrap();
         let metadata = f.metadata().unwrap();
         let permissions = metadata.permissions();
         println!("permissions: {:o}", permissions.mode());
         assert_eq!(permissions.mode(), 33261);
         assert_eq!(
             Path::new("exec_file"),
-            read_link("dest/symlink").unwrap().as_path()
+            read_link(format!("{dst}/symlink")).unwrap().as_path()
         );
         assert_eq!(
             Path::new("does_not_exist"),
-            read_link("dest/dangling_symlink").unwrap().as_path()
+            read_link(format!("{dst}/dangling_symlink"))
+                .unwrap()
+                .as_path()
         );
     }
 
     // clean up
-    std::fs::remove_dir_all("source").unwrap();
-    std::fs::remove_dir_all("dest").unwrap();
+    std::fs::remove_dir_all(src).unwrap();
+    std::fs::remove_dir_all(dst).unwrap();
 }
-
 
 #[test]
 fn copy_subdir() {
@@ -59,13 +70,10 @@ fn copy_subdir() {
     File::create("source/b.jpg").unwrap();
     File::create("source/d.txt").unwrap();
 
-    CopyBuilder::new("source", "source/subdir")
-    .run()
-    .unwrap();
+    CopyBuilder::new("source", "source/subdir").run().unwrap();
 
-    // std::fs::remove_dir_all("source").unwrap();
+    std::fs::remove_dir_all("source").unwrap();
 }
-
 
 #[test]
 fn copy_exclude() {
@@ -76,8 +84,8 @@ fn copy_exclude() {
     let dst = "ex_dest";
 
     create_dir_all(src).unwrap();
-    File::create(format!("{}/foo", src)).unwrap();
-    File::create(format!("{}/bar", src)).unwrap();
+    File::create(format!("{src}/foo")).unwrap();
+    File::create(format!("{src}/bar")).unwrap();
 
     CopyBuilder::new(src, dst)
         .overwrite(true)
@@ -102,9 +110,9 @@ fn copy_include() {
     let dst = "in_dest";
 
     create_dir_all(src).unwrap();
-    File::create(format!("{}/foo", src)).unwrap();
-    File::create(format!("{}/bar", src)).unwrap();
-    File::create(format!("{}/baz", src)).unwrap();
+    File::create(format!("{src}/foo")).unwrap();
+    File::create(format!("{src}/bar")).unwrap();
+    File::create(format!("{src}/baz")).unwrap();
 
     CopyBuilder::new(src, dst)
         .overwrite(true)
@@ -114,9 +122,37 @@ fn copy_include() {
         .run()
         .unwrap();
 
-    assert!(Path::new(&format!("{}/foo", dst)).is_file());
-    assert!(!Path::new(&format!("{}/bar", dst)).exists());
-    assert!(Path::new(&format!("{}/baz", dst)).exists());
+    assert!(Path::new(&format!("{dst}/foo")).is_file());
+    assert!(!Path::new(&format!("{dst}/bar")).exists());
+    assert!(Path::new(&format!("{dst}/baz")).exists());
+
+    // clean up
+    std::fs::remove_dir_all(src).unwrap();
+    std::fs::remove_dir_all(dst).unwrap();
+}
+
+#[test]
+fn copy_empty_include() {
+    std::env::set_var("RUST_LOG", "DEBUG");
+    let _ = env_logger::builder().try_init();
+
+    let src = "in_src_inc";
+    let dst = "in_dest_inc";
+
+    create_dir_all(src).unwrap();
+    File::create(format!("{src}/foo")).unwrap();
+    File::create(format!("{src}/bar")).unwrap();
+    File::create(format!("{src}/baz")).unwrap();
+
+    CopyBuilder::new(src, dst)
+        .overwrite(true)
+        .overwrite_if_newer(true)
+        .run()
+        .unwrap();
+
+    assert!(Path::new(&format!("{dst}/foo")).is_file());
+    assert!(Path::new(&format!("{dst}/bar")).exists());
+    assert!(Path::new(&format!("{dst}/baz")).exists());
 
     // clean up
     std::fs::remove_dir_all(src).unwrap();
@@ -125,11 +161,13 @@ fn copy_include() {
 
 #[test]
 fn copy_cargo() {
+    std::env::set_var("RUST_LOG", "DEBUG");
+    let _ = env_logger::builder().try_init();
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
     let sample_dir = "cargo";
-    let output_dir = format!("{}_output", sample_dir);
-    let archive = format!("{}.zip", sample_dir);
-    println!("Expanding {}", archive);
+    let output_dir = format!("{sample_dir}_output");
+    let archive = format!("{sample_dir}.zip");
+    info!("Expanding {archive}");
 
     let mut resp = reqwest::blocking::get(url).unwrap();
     let mut out = File::create(&archive).expect("failed to create file");
