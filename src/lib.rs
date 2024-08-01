@@ -275,10 +275,11 @@ impl CopyBuilder {
                     }
                 }
 
-                if !self.include_filters.is_empty() && !self
-                    .include_filters
-                    .iter()
-                    .any(|f| entry.path().to_string_lossy().contains(f))
+                if !self.include_filters.is_empty()
+                    && !self
+                        .include_filters
+                        .iter()
+                        .any(|f| entry.path().to_string_lossy().contains(f))
                 {
                     continue 'files;
                 }
