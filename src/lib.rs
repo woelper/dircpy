@@ -275,7 +275,7 @@ impl CopyBuilder {
                     }
                 }
 
-                if !self
+                if !self.include_filters.is_empty() && !self
                     .include_filters
                     .iter()
                     .any(|f| entry.path().to_string_lossy().contains(f))
