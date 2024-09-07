@@ -295,6 +295,16 @@ impl CopyBuilder {
                     );
                 }
 
+                if self.overwrite_all {
+                    debug!(
+                        "Overwrite all: CP {} DST {}",
+                        entry.path().display(),
+                        dest_entry.display()
+                    );
+                    copy(entry.path(), dest_entry)?;
+                    continue;
+                }
+
                 // File newer?
                 if dest_exists && self.overwrite_if_newer {
                     if is_file_newer(entry.path(), &dest_entry) {
