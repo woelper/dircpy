@@ -235,3 +235,49 @@ fn copy_cargo() {
     std::fs::remove_dir_all(output_dir).unwrap();
     std::fs::remove_file(archive).unwrap();
 }
+
+#[test]
+fn copy_cargo_progress() {
+    std::env::set_var("RUST_LOG", "INFO");
+    let _ = env_logger::builder().try_init();
+    let url = "https://github.com/rust-lang/cargo/archive/master.zip";
+    let sample_dir = "cargo";
+    let output_dir = format!("{sample_dir}_output");
+    let archive = format!("{sample_dir}.zip");
+    info!("Expanding {archive}");
+
+    let mut resp = reqwest::blocking::get(url).unwrap();
+    let mut out = File::create(&archive).expect("failed to create file");
+    std::io::copy(&mut resp, &mut out).expect("failed to copy content");
+
+    let reader = std::fs::File::open(&archive).unwrap();
+
+    unzip::Unzipper::new(reader, sample_dir)
+        .unzip()
+        .expect("Could not expand cargo sources");
+    let num_input_files = WalkDir::new(&sample_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .count();
+
+    CopyBuilder::new(
+        &Path::new(sample_dir).canonicalize().unwrap(),
+        &PathBuf::from(&output_dir),
+    )
+    .with_progress(|all, done| {
+        info!("copied {done}/{all}");
+    })
+    .run()
+    .unwrap();
+
+    let num_output_files = WalkDir::new(&output_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .count();
+
+    assert_eq!(num_output_files, num_input_files);
+
+    std::fs::remove_dir_all(sample_dir).unwrap();
+    std::fs::remove_dir_all(output_dir).unwrap();
+    std::fs::remove_file(archive).unwrap();
+}

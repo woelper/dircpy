@@ -65,11 +65,11 @@ fn test_cp(c: &mut Criterion) {
                 .arg("-r")
                 .arg(SOURCE)
                 .arg(&format!("{}{}", DEST, random_string()))
-                .output().unwrap();
+                .output()
+                .unwrap();
         });
     });
 }
-
 
 fn test_dircpy_single(c: &mut Criterion) {
     // One-time setup code goes here
@@ -114,7 +114,8 @@ fn test_lms(c: &mut Criterion) {
                 .arg("cp")
                 .arg(SOURCE)
                 .arg(&format!("{}{}", DEST, random_string()))
-                .output().unwrap();
+                .output()
+                .unwrap();
         });
     });
 }
