@@ -4,11 +4,20 @@ name: Test Windows
 
 jobs:
   check:
-    name: Test windows-latest
+    name: Check windows-latest
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
       - name: Run cargo check
         uses: actions-rs/cargo@v1
         with:
           command: check
+  test:
+    name: Run Windows tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run cargo tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
