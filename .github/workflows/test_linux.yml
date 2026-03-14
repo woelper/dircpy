@@ -13,7 +13,7 @@ jobs:
         with:
           command: check
   test:
-    name: Run WiLinuxndows tests
+    name: Run Linux tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
