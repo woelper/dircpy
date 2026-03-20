@@ -12,22 +12,30 @@ A cross-platform library to recursively copy directories, with some convenience 
 
 
 ```rust
- use dircpy::*;
+use dircpy::*;
 
- // Most basic example:
- copy_dir("src", "dest");
+// Most basic example:
+copy_dir("src", "dest");
 
- // Simple builder example:
+// Simple builder example:
 CopyBuilder::new("src", "dest")
   .run()
   .unwrap();
 
- // Copy recursively, only including certain files:
+// Copy recursively, only including certain files:
 CopyBuilder::new("src", "dest")
   .overwrite_if_newer(true)
   .overwrite_if_size_differs(true)
   .with_include_filter(".txt")
   .with_include_filter(".csv")
+  .run()
+  .unwrap();
+
+// Copy with progress:
+CopyBuilder::new("src", "dest")
+  .with_progress(|all, done| {
+    println!("copied {done}/{all}");
+  })
   .run()
   .unwrap();
   
