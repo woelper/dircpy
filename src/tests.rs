@@ -241,7 +241,7 @@ fn copy_cargo_progress() {
     std::env::set_var("RUST_LOG", "INFO");
     let _ = env_logger::builder().try_init();
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
-    let sample_dir = "cargo";
+    let sample_dir = "cargo_progress";
     let output_dir = format!("{sample_dir}_output");
     let archive = format!("{sample_dir}.zip");
     info!("Expanding {archive}");
