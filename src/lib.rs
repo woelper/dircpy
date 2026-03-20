@@ -35,7 +35,7 @@ use walkdir::WalkDir;
 mod tests;
 
 /// A function to output progess in the form total files, copied files
-type ProgressFn = Arc<dyn Fn(usize, usize) + Send + Sync>;
+type ProgressFn = Arc<dyn Fn(usize, usize)>;
 
 #[derive(Clone)]
 /// Recursively copy a directory from a to b.
@@ -242,7 +242,7 @@ impl CopyBuilder {
     /// Supply a callback function to be executed on each copy operation. It supplies the total number of files and the files already copied.
     pub fn with_progress<F>(self, callback: F) -> CopyBuilder
     where
-        F: Fn(usize, usize) + Send + Sync + 'static,
+        F: Fn(usize, usize) + 'static,
     {
         CopyBuilder {
             progress_callback: Some(Arc::new(callback)),
