@@ -76,6 +76,40 @@ fn copy_subdir() {
     std::fs::remove_dir_all("source").unwrap();
 }
 
+#[cfg(feature = "jwalk")]
+#[test]
+fn copy_subdir_jwalk() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let source_dir = "overwrite_sourcej";
+    let dest_dir = "overwrite_destj";
+
+    std::env::set_var("RUST_LOG", "debug");
+    let _ = env_logger::try_init();
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+    File::create(format!("{source_dir}/a.txt")).unwrap();
+    let mut file_b = File::create(format!("{source_dir}/b.txt")).unwrap();
+
+    let contents = "Contents changed";
+    // Copy once, both files are empty
+    CopyBuilder::new(source_dir, dest_dir).run().unwrap();
+    // write something to file b so we can check if we overwrite it
+    write!(file_b, "{contents}").unwrap();
+    // perform a second copy
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .run()
+        .unwrap();
+    // make sure the contents of b are now changed
+    let s = read_to_string(File::open(format!("{dest_dir}/b.txt")).unwrap()).unwrap();
+    assert!(s == contents, "Destination was not overwritten");
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
 #[test]
 fn copy_overwrite() {
     use std::fs::File;
@@ -240,8 +274,10 @@ fn copy_cargo() {
 fn copy_cargo_progress() {
     std::env::set_var("RUST_LOG", "INFO");
     let _ = env_logger::builder().try_init();
+    let test_name = std::thread::current().name().unwrap().to_string();
+
     let url = "https://github.com/rust-lang/cargo/archive/master.zip";
-    let sample_dir = "cargo_progress";
+    let sample_dir = test_name;
     let output_dir = format!("{sample_dir}_output");
     let archive = format!("{sample_dir}.zip");
     info!("Expanding {archive}");
@@ -252,7 +288,7 @@ fn copy_cargo_progress() {
 
     let reader = std::fs::File::open(&archive).unwrap();
 
-    unzip::Unzipper::new(reader, sample_dir)
+    unzip::Unzipper::new(reader, &sample_dir)
         .unzip()
         .expect("Could not expand cargo sources");
     let num_input_files = WalkDir::new(&sample_dir)
@@ -261,7 +297,7 @@ fn copy_cargo_progress() {
         .count();
 
     CopyBuilder::new(
-        &Path::new(sample_dir).canonicalize().unwrap(),
+        &Path::new(&sample_dir).canonicalize().unwrap(),
         &PathBuf::from(&output_dir),
     )
     .with_progress(|all, done| {
