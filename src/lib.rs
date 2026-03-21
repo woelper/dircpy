@@ -93,8 +93,12 @@ impl std::fmt::Debug for CopyBuilder {
         f.debug_struct("CopyBuilder")
             .field("source", &self.source)
             .field("destination", &self.destination)
+            .field("overwrite_all", &self.overwrite_all)
+            .field("overwrite_if_newer", &self.overwrite_if_newer)
+            .field("overwrite_if_size_differs", &self.overwrite_if_size_differs)
+            .field("exclude_filters", &self.exclude_filters)
+            .field("include_filters", &self.include_filters)
             .field("has_progress_callback", &self.progress_callback.is_some())
-            // ... other fields ...
             .finish()
     }
 }
