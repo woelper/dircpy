@@ -27,13 +27,17 @@ use jwalk::WalkDir as JWalkDir;
 use std::fs::{copy, read_link};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Clone)]
+/// A function to output progess in the form total files, copied files
+type ProgressFn = Arc<dyn Fn(usize, usize)>;
+
+#[derive(Clone)]
 /// Recursively copy a directory from a to b.
 /// ```
 /// use dircpy::*;
@@ -54,6 +58,15 @@ mod tests;
 ///.with_include_filter(".csv")
 ///.run()
 ///.unwrap();
+///
+/// // Copy with progress:
+///CopyBuilder::new("src", "dest")
+///.with_progress(|all, done| {
+///    println!("copied {done}/{all}");
+///})
+///.run()
+///.unwrap();
+///
 /// ```
 
 pub struct CopyBuilder {
@@ -71,6 +84,23 @@ pub struct CopyBuilder {
     exclude_filters: Vec<String>,
     /// A list of exclude filters
     include_filters: Vec<String>,
+    /// An optional progress function. Has a performance penalty as the total number of files need to be calculated.
+    progress_callback: Option<ProgressFn>,
+}
+
+impl std::fmt::Debug for CopyBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CopyBuilder")
+            .field("source", &self.source)
+            .field("destination", &self.destination)
+            .field("overwrite_all", &self.overwrite_all)
+            .field("overwrite_if_newer", &self.overwrite_if_newer)
+            .field("overwrite_if_size_differs", &self.overwrite_if_size_differs)
+            .field("exclude_filters", &self.exclude_filters)
+            .field("include_filters", &self.include_filters)
+            .field("has_progress_callback", &self.progress_callback.is_some())
+            .finish()
+    }
 }
 
 /// Determine if the modification date of file_a is newer than that of file_b
@@ -185,6 +215,7 @@ impl CopyBuilder {
             overwrite_if_size_differs: false,
             exclude_filters: vec![],
             include_filters: vec![],
+            progress_callback: None,
         }
     }
 
@@ -208,6 +239,17 @@ impl CopyBuilder {
     pub fn overwrite_if_size_differs(self, overwrite_if_size_differs: bool) -> CopyBuilder {
         CopyBuilder {
             overwrite_if_size_differs,
+            ..self
+        }
+    }
+
+    /// Supply a callback function to be executed on each copy operation. It supplies the total number of files and the files already copied.
+    pub fn with_progress<F>(self, callback: F) -> CopyBuilder
+    where
+        F: Fn(usize, usize) + 'static,
+    {
+        CopyBuilder {
+            progress_callback: Some(Arc::new(callback)),
             ..self
         }
     }
@@ -245,11 +287,27 @@ impl CopyBuilder {
             abs_dest.display()
         );
 
+        let mut num_files_total = 1;
+        let mut num_files_processed = 0;
+
+        if self.progress_callback.is_some() {
+            num_files_total = WalkDir::new(&abs_source)
+                .into_iter()
+                .filter_entry(|e| e.path() != abs_dest)
+                .filter_map(|e| e.ok())
+                .count();
+        }
+
         'files: for entry in WalkDir::new(&abs_source)
             .into_iter()
             .filter_entry(|e| e.path() != abs_dest)
             .filter_map(|e| e.ok())
         {
+            if let Some(cb) = &self.progress_callback {
+                num_files_processed += 1;
+                cb(num_files_total, num_files_processed);
+            }
+
             let rel_dest = entry.path().strip_prefix(&abs_source).map_err(|e| {
                 Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
             })?;
@@ -394,6 +452,7 @@ pub fn copy_dir_advanced<P: AsRef<Path>, Q: AsRef<Path>>(
         overwrite_if_size_differs,
         exclude_filters,
         include_filters,
+        progress_callback: None,
     }
     .run()
 }
@@ -408,6 +467,7 @@ pub fn copy_dir<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> Result<()
         overwrite_if_size_differs: false,
         exclude_filters: vec![],
         include_filters: vec![],
+        progress_callback: None,
     }
     .run()
 }
