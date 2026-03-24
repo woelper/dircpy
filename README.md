@@ -38,5 +38,4 @@ CopyBuilder::new("src", "dest")
   })
   .run()
   .unwrap();
-  
 ```
