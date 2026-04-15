@@ -316,3 +316,88 @@ fn copy_cargo_progress() {
     std::fs::remove_dir_all(output_dir).unwrap();
     std::fs::remove_file(archive).unwrap();
 }
+
+#[test]
+/// Source is NOT newer, but sizes differ → should copy even though source is older.
+fn overwrite_or_size_differs_not_newer() {
+    let sample_dir = "overwrite_size_diff";
+    use std::fs::File;
+    use std::io::Write;
+    std::env::set_var("RUST_LOG", "DEBUG");
+    let _ = env_logger::builder().try_init();
+
+    let source_dir = format!("{sample_dir}_src");
+    let dest_dir = format!("{sample_dir}_dest");
+
+    create_dir_all(&source_dir).unwrap();
+    create_dir_all(&dest_dir).unwrap();
+
+    // Write source first so it is older.
+    File::create(format!("{source_dir}/file.txt")).unwrap();
+
+    // Small delay so the dest mtime is strictly newer.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Write dest after with different (larger) content, making it newer AND bigger.
+    let mut f = File::create(format!("{dest_dir}/file.txt")).unwrap();
+    write!(f, "much longer destination content").unwrap();
+    drop(f);
+
+    // Source is older but smaller; sizes differ, so should be copied.
+    CopyBuilder::new(&source_dir, &dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{dest_dir}/file.txt")).unwrap();
+    assert_eq!(result, "", "File should be identical to source");
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[test]
+fn overwrite_or_newer_same_size() {
+    // Source IS newer, same size → should copy even though size is unchanged.
+    use std::fs::File;
+    use std::io::Write;
+    let sample_dir = "overwrite_or_newer_same_size";
+
+    let source_dir = format!("{sample_dir}_src");
+    let dest_dir = format!("{sample_dir}_dest");
+
+    std::env::set_var("RUST_LOG", "debug");
+    let _ = env_logger::try_init();
+    create_dir_all(&source_dir).unwrap();
+    create_dir_all(&dest_dir).unwrap();
+
+    // Write dest first so it is older.
+    let mut f = File::create(format!("{dest_dir}/file.txt")).unwrap();
+    write!(f, "hello123").unwrap(); // 8 bytes
+    drop(f);
+
+    // Small delay so the source mtime is strictly newer.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Write source after with the same length (same size, but newer).
+    let source_content = "world456"; // 8 bytes
+    let mut f = File::create(format!("{source_dir}/file.txt")).unwrap();
+    write!(f, "{source_content}").unwrap();
+    drop(f);
+
+    CopyBuilder::new(&source_dir, &dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{dest_dir}/file.txt")).unwrap();
+    assert_eq!(
+        result, source_content,
+        "File should be overwritten because source is newer (even though size is the same)"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}

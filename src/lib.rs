@@ -122,88 +122,6 @@ fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
     }
 }
 
-#[cfg(feature = "jwalk")]
-fn copy_file(source: &Path, options: CopyBuilder) -> Result<(), std::io::Error> {
-    let abs_source = options.source.canonicalize()?;
-    let abs_dest = options.destination.canonicalize()?;
-
-    let rel_dest = source
-        .strip_prefix(&abs_source)
-        .map_err(|e| Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e)))?;
-    let dest_entry = abs_dest.join(rel_dest);
-
-    if source.is_file() {
-        // the source exists
-
-        // Early out if target is present and overwrite is off
-        if !options.overwrite_all
-            && dest_entry.is_file()
-            && !options.overwrite_if_newer
-            && !options.overwrite_if_size_differs
-        {
-            return Ok(());
-        }
-
-        for f in &options.exclude_filters {
-            if source.to_string_lossy().contains(f) {
-                return Ok(());
-            }
-        }
-
-        for f in &options.include_filters {
-            if !source.to_string_lossy().contains(f) {
-                return Ok(());
-            }
-        }
-
-        // File is not present: copy it
-        if !dest_entry.is_file() {
-            debug!(
-                "Dest not present: CP {} DST {}",
-                source.display(),
-                dest_entry.display()
-            );
-            copy(source, dest_entry)?;
-            return Ok(());
-        }
-
-        // File newer?
-        if options.overwrite_if_newer {
-            if is_file_newer(source, &dest_entry) {
-                debug!(
-                    "Source newer: CP {} DST {}",
-                    source.display(),
-                    dest_entry.display()
-                );
-                copy(source, &dest_entry)?;
-            }
-            return Ok(());
-        }
-
-        // Different size?
-        if options.overwrite_if_size_differs {
-            if is_filesize_different(source, &dest_entry) {
-                debug!(
-                    "Source differs: CP {} DST {}",
-                    source.display(),
-                    dest_entry.display()
-                );
-                copy(source, &dest_entry)?;
-            }
-            return Ok(());
-        }
-
-        // The regular copy operation
-        debug!("CP {} DST {}", source.display(), dest_entry.display());
-        copy(source, dest_entry)?;
-    } else if source.is_dir() && !dest_entry.is_dir() {
-        debug!("MKDIR {}", source.display());
-        std::fs::create_dir_all(dest_entry)?;
-    }
-
-    Ok(())
-}
-
 impl CopyBuilder {
     /// Construct a new CopyBuilder with `source` and `dest`.
     pub fn new<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> CopyBuilder {
@@ -353,28 +271,26 @@ impl CopyBuilder {
                     );
                 }
 
-                // File newer?
-                if dest_exists && self.overwrite_if_newer {
-                    if is_file_newer(entry.path(), &dest_entry) {
+                // Conditional overwrite checks (OR semantics: copy if any enabled condition matches)
+                if dest_exists && (self.overwrite_if_newer || self.overwrite_if_size_differs) {
+                    let newer = self.overwrite_if_newer && is_file_newer(entry.path(), &dest_entry);
+                    let size_differs = self.overwrite_if_size_differs
+                        && is_filesize_different(entry.path(), &dest_entry);
+                    if newer {
                         debug!(
                             "Source newer: CP {} DST {}",
                             entry.path().display(),
                             dest_entry.display()
                         );
-                    } else {
-                        continue;
                     }
-                }
-
-                // Different size?
-                if dest_exists && self.overwrite_if_size_differs {
-                    if is_filesize_different(entry.path(), &dest_entry) {
+                    if size_differs {
                         debug!(
                             "Source differs: CP {} DST {}",
                             entry.path().display(),
                             dest_entry.display()
                         );
-                    } else {
+                    }
+                    if !newer && !size_differs {
                         continue;
                     }
                 }
@@ -411,26 +327,12 @@ impl CopyBuilder {
     /// Execute the copy operation in parallel. The usage of this function is discouraged
     /// until proven to work faster.
     #[cfg(feature = "jwalk")]
+    #[deprecated(
+        since = "0.3.21",
+        note = "please use `run` instead. This is nowjust a wrapper around `run`."
+    )]
     pub fn run_par(&self) -> Result<(), std::io::Error> {
-        if !self.destination.is_dir() {
-            debug!("MKDIR {:?}", &self.destination);
-            std::fs::create_dir_all(&self.destination)?;
-        }
-        let abs_source = self.source.canonicalize()?;
-        let abs_dest = self.destination.canonicalize()?;
-        debug!(
-            "Building copy operation: SRC {} DST {}",
-            abs_source.display(),
-            abs_dest.display()
-        );
-        for entry in JWalkDir::new(&abs_source)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let _ = copy_file(&entry.path(), self.clone());
-        }
-
-        Ok(())
+        self.run()
     }
 }
 
