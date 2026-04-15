@@ -143,6 +143,184 @@ fn copy_overwrite() {
     std::fs::remove_dir_all(dest_dir).unwrap();
 }
 
+// Bug 2: when both overwrite_if_newer and overwrite_if_size_differs are set,
+// the copy should happen if EITHER condition is true (OR semantics), not both (AND).
+
+#[test]
+fn overwrite_or_newer_same_size() {
+    // Source IS newer, same size → should copy even though size is unchanged.
+    use std::fs::File;
+    use std::io::Write;
+
+    let source_dir = "or_newer_same_size_src";
+    let dest_dir = "or_newer_same_size_dst";
+
+    std::env::set_var("RUST_LOG", "debug");
+    let _ = env_logger::try_init();
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+
+    // Write dest first so it is older.
+    let mut f = File::create(format!("{dest_dir}/file.txt")).unwrap();
+    write!(f, "hello123").unwrap(); // 8 bytes
+    drop(f);
+
+    // Small delay so the source mtime is strictly newer.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Write source after with the same length (same size, but newer).
+    let source_content = "world456"; // 8 bytes
+    let mut f = File::create(format!("{source_dir}/file.txt")).unwrap();
+    write!(f, "{source_content}").unwrap();
+    drop(f);
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{dest_dir}/file.txt")).unwrap();
+    assert_eq!(
+        result, source_content,
+        "File should be overwritten because source is newer (even though size is the same)"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[test]
+fn overwrite_or_size_differs_not_newer() {
+    // Source is NOT newer, but sizes differ → should copy even though source is older.
+    use std::fs::File;
+    use std::io::Write;
+
+    let source_dir = "or_size_diff_not_newer_src";
+    let dest_dir = "or_size_diff_not_newer_dst";
+
+    std::env::set_var("RUST_LOG", "debug");
+    let _ = env_logger::try_init();
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+
+    // Write source first so it is older.
+    let source_content = "short";
+    let mut f = File::create(format!("{source_dir}/file.txt")).unwrap();
+    write!(f, "{source_content}").unwrap();
+    drop(f);
+
+    // Small delay so the dest mtime is strictly newer.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Write dest after with different (larger) content, making it newer AND bigger.
+    let mut f = File::create(format!("{dest_dir}/file.txt")).unwrap();
+    write!(f, "much longer destination content").unwrap();
+    drop(f);
+
+    // Source is older but smaller; sizes differ, so should be copied.
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{dest_dir}/file.txt")).unwrap();
+    assert_eq!(
+        result, source_content,
+        "File should be overwritten because sizes differ (even though source is not newer)"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+// Bug 3: the same OR-semantics bug existed in copy_file() used by run_par().
+
+#[cfg(feature = "jwalk")]
+#[test]
+fn overwrite_or_newer_same_size_par() {
+    // Source IS newer, same size → run_par() should copy.
+    use std::fs::File;
+    use std::io::Write;
+
+    let source_dir = "or_newer_same_size_par_src";
+    let dest_dir = "or_newer_same_size_par_dst";
+
+    std::env::set_var("RUST_LOG", "debug");
+    let _ = env_logger::try_init();
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+
+    let mut f = File::create(format!("{dest_dir}/file.txt")).unwrap();
+    write!(f, "hello123").unwrap();
+    drop(f);
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let source_content = "world456";
+    let mut f = File::create(format!("{source_dir}/file.txt")).unwrap();
+    write!(f, "{source_content}").unwrap();
+    drop(f);
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run_par()
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{dest_dir}/file.txt")).unwrap();
+    assert_eq!(
+        result, source_content,
+        "run_par: file should be overwritten because source is newer (even though size is the same)"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[cfg(feature = "jwalk")]
+#[test]
+fn overwrite_or_size_differs_not_newer_par() {
+    // Source is NOT newer, but sizes differ → run_par() should copy.
+    use std::fs::File;
+    use std::io::Write;
+
+    let source_dir = "or_size_diff_not_newer_par_src";
+    let dest_dir = "or_size_diff_not_newer_par_dst";
+
+    std::env::set_var("RUST_LOG", "debug");
+    let _ = env_logger::try_init();
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+
+    let source_content = "short";
+    let mut f = File::create(format!("{source_dir}/file.txt")).unwrap();
+    write!(f, "{source_content}").unwrap();
+    drop(f);
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let mut f = File::create(format!("{dest_dir}/file.txt")).unwrap();
+    write!(f, "much longer destination content").unwrap();
+    drop(f);
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run_par()
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{dest_dir}/file.txt")).unwrap();
+    assert_eq!(
+        result, source_content,
+        "run_par: file should be overwritten because sizes differ (even though source is not newer)"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
 #[test]
 fn copy_exclude() {
     std::env::set_var("RUST_LOG", "DEBUG");
