@@ -11,13 +11,14 @@ keywords = ["copy", "recursive", "filesystem", "file"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["jwalk"]
+default = []
+# Deprecated and without effect. Kept so dependents enabling it still build.
+jwalk = []
 
 [dependencies]
 walkdir = "2.5"
 log = "0.4"
 # rayon = "1.4.0"
-jwalk = { version = "0.8", optional = true }
 
 [dev-dependencies]
 unzip = "0.1"

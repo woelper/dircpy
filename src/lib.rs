@@ -22,8 +22,6 @@
 
 use log::*;
 // use rayon::prelude::*;
-#[cfg(feature = "jwalk")]
-use jwalk::WalkDir as JWalkDir;
 use std::fs::{copy, read_link};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -34,7 +32,8 @@ use walkdir::WalkDir;
 #[cfg(test)]
 mod tests;
 
-/// A function to output progess in the form total files, copied files
+/// A function to output progress in the form (total entries, processed entries).
+/// Entries include directories and files that are skipped.
 type ProgressFn = Arc<dyn Fn(usize, usize)>;
 
 #[derive(Clone)]
@@ -76,15 +75,15 @@ pub struct CopyBuilder {
     pub destination: PathBuf,
     /// Overwrite all files in target, if already existing
     overwrite_all: bool,
-    /// Overwrite target files if they are newer
+    /// Overwrite target files if the source file is newer
     overwrite_if_newer: bool,
     /// Overwrite target files if they differ in size
     overwrite_if_size_differs: bool,
-    /// A list of include filters
-    exclude_filters: Vec<String>,
     /// A list of exclude filters
+    exclude_filters: Vec<String>,
+    /// A list of include filters
     include_filters: Vec<String>,
-    /// An optional progress function. Has a performance penalty as the total number of files need to be calculated.
+    /// An optional progress function. Has a performance penalty as the total number of entries needs to be calculated.
     progress_callback: Option<ProgressFn>,
 }
 
@@ -156,7 +155,7 @@ impl CopyBuilder {
         }
     }
 
-    /// Overwrite target files (off by default)
+    /// Overwrite target files (off by default). Takes precedence over the conditional overwrite options.
     pub fn overwrite(self, overwrite: bool) -> CopyBuilder {
         CopyBuilder {
             overwrite_all: overwrite,
@@ -180,7 +179,9 @@ impl CopyBuilder {
         }
     }
 
-    /// Supply a callback function to be executed on each copy operation. It supplies the total number of files and the files already copied.
+    /// Supply a callback function to be executed for each entry in the source directory.
+    /// It supplies the total number of entries and the number of entries already processed.
+    /// Entries include directories and files that are skipped.
     pub fn with_progress<F>(self, callback: F) -> CopyBuilder
     where
         F: Fn(usize, usize) + 'static,
@@ -191,7 +192,7 @@ impl CopyBuilder {
         }
     }
 
-    /// Do not copy files that contain this string
+    /// Do not copy files whose path contains this string.
     pub fn with_exclude_filter(self, f: &str) -> CopyBuilder {
         let mut filters = self.exclude_filters.clone();
         filters.push(f.to_owned());
@@ -201,7 +202,7 @@ impl CopyBuilder {
         }
     }
 
-    /// Only copy files that contain this string.
+    /// Only copy files whose path contains this string.
     pub fn with_include_filter(self, f: &str) -> CopyBuilder {
         let mut filters = self.include_filters.clone();
         filters.push(f.to_owned());
@@ -376,12 +377,10 @@ impl CopyBuilder {
         Ok(())
     }
 
-    /// Execute the copy operation in parallel. The usage of this function is discouraged
-    /// until proven to work faster.
-    #[cfg(feature = "jwalk")]
+    /// Formerly executed the copy operation in parallel. Now only calls [`CopyBuilder::run`].
     #[deprecated(
         since = "0.3.21",
-        note = "please use `run` instead. This is nowjust a wrapper around `run`."
+        note = "please use `run` instead. This is now just a wrapper around `run`."
     )]
     pub fn run_par(&self) -> Result<(), std::io::Error> {
         self.run()

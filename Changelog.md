@@ -1,3 +1,13 @@
+0.3.21:
+Fix: files were not copied for some combinations of `overwrite_if_newer` and `overwrite_if_size_differs`. Conditions are now OR-combined
+Fix: `overwrite(true)` was ignored when conditional overwrite options were also set
+Fix: overwriting could write through symlinks in the destination to locations outside of it
+Fix: copying over an existing symlink failed with "File exists"
+Copying a directory onto a symlink in the destination now returns an error unless `overwrite(true)` is set
+Deprecate `run_par`. It is now a wrapper around `run`
+Remove the jwalk dependency. The `jwalk` feature is kept for compatibility, but has no effect
+Fix wrong documentation for filters, progress callback and `overwrite_if_newer`
+More tests
 0.3.19:
 Fix for empty include lists (Thanks @AdamLeyshon)
 Add test for empty include lists

@@ -86,21 +86,6 @@ fn test_dircpy_single(c: &mut Criterion) {
     });
 }
 
-fn test_dircpy_parallel(c: &mut Criterion) {
-    // One-time setup code goes here
-    #[cfg(feature = "jwalk")]
-    c.bench_function("cpy multi-threaded", |b| {
-        // Per-sample (note that a sample can be many iterations) setup goes here
-        b.iter(|| {
-            // Measured code goes here
-            CopyBuilder::new(&SOURCE, &format!("{}{}", DEST, random_string()))
-                .overwrite(true)
-                .run_par()
-                .unwrap();
-        });
-    });
-}
-
 fn test_lms(c: &mut Criterion) {
     std::env::set_var("RUST_LOG", "INFO");
     let _ = env_logger::builder().try_init();
@@ -129,6 +114,6 @@ criterion_group! {
     .warm_up_time(std::time::Duration::from_secs(4))
     .measurement_time(std::time::Duration::from_secs(6))
     ;
-    targets = setup, test_dircpy_single, test_dircpy_parallel, test_cp, test_lms, teardown
+    targets = setup, test_dircpy_single, test_cp, test_lms, teardown
 }
 criterion_main!(benches);
