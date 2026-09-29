@@ -1,6 +1,6 @@
 [package]
 name = "dircpy"
-version = "0.3.20"
+version = "0.3.21"
 authors = ["Johann Woelper <woelper@gmail.com>"]
 edition = "2021"
 rust-version = "1.64"
