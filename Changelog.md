@@ -14,6 +14,8 @@ Errors now contain the affected paths
 Copying a directory onto a symlink in the destination now returns an error unless `overwrite(true)` is set
 Deprecate `run_par`. It is now a wrapper around `run`
 Remove the jwalk dependency. The `jwalk` feature is kept for compatibility, but has no effect
+Faster copying through fewer metadata lookups per file: re-runs with `overwrite_if_newer` or `overwrite_if_size_differs` are about 2x faster. On Linux, copying many small files is about 1.2x faster
+On Linux, new files are created exclusively, so a symlink appearing in the destination during the copy is never written through
 Switch to edition 2021 and declare the minimum Rust version (1.64), checked in CI
 Fix wrong documentation for filters, progress callback and `overwrite_if_newer`
 More tests

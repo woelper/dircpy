@@ -776,3 +776,122 @@ fn copy_symlinks_windows() {
         "Directory symlink was created as file symlink"
     );
 }
+
+#[test]
+/// A re-run with conditional overwrites must not copy files that are unchanged.
+fn conditional_overwrite_skips_unchanged() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "skip_unchanged_src";
+    let dest_dir = "skip_unchanged_dest";
+
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    std::fs::write(format!("{source_dir}/sub/file"), "SRC").unwrap();
+    CopyBuilder::new(source_dir, dest_dir).run().unwrap();
+
+    // same size, dest is newer: neither condition matches
+    std::fs::write(format!("{dest_dir}/sub/file"), "DST").unwrap();
+    let now = SystemTime::now();
+    File::options()
+        .write(true)
+        .open(format!("{source_dir}/sub/file"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(3600))
+        .unwrap();
+    File::options()
+        .write(true)
+        .open(format!("{dest_dir}/sub/file"))
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{dest_dir}/sub/file")).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    assert_eq!(content, "DST", "Unchanged file was copied");
+}
+
+#[cfg(unix)]
+#[test]
+/// Permissions must be copied exactly, regardless of the umask or an existing dest file.
+fn copy_keeps_permissions() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "permissions_src";
+    let dest_new = "permissions_new_dest";
+    let dest_existing = "permissions_existing_dest";
+
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    // 0o777 is restricted by any umask when a file is created
+    std::fs::write(format!("{source_dir}/sub/open"), "open").unwrap();
+    std::fs::set_permissions(
+        format!("{source_dir}/sub/open"),
+        std::fs::Permissions::from_mode(0o777),
+    )
+    .unwrap();
+    std::fs::write(format!("{source_dir}/sub/private"), "private").unwrap();
+    std::fs::set_permissions(
+        format!("{source_dir}/sub/private"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+
+    // dest does not exist yet
+    CopyBuilder::new(source_dir, dest_new).run().unwrap();
+
+    // dest exists, with a file with different permissions
+    create_dir_all(format!("{dest_existing}/sub")).unwrap();
+    std::fs::write(format!("{dest_existing}/sub/private"), "old").unwrap();
+    std::fs::set_permissions(
+        format!("{dest_existing}/sub/private"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    CopyBuilder::new(source_dir, dest_existing)
+        .overwrite(true)
+        .run()
+        .unwrap();
+
+    let mode = |p: String| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    let modes = [
+        mode(format!("{dest_new}/sub/open")),
+        mode(format!("{dest_new}/sub/private")),
+        mode(format!("{dest_existing}/sub/open")),
+        mode(format!("{dest_existing}/sub/private")),
+    ];
+    let private_content = std::fs::read_to_string(format!("{dest_existing}/sub/private")).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_new).unwrap();
+    std::fs::remove_dir_all(dest_existing).unwrap();
+
+    assert_eq!(modes, [0o777, 0o600, 0o777, 0o600]);
+    assert_eq!(private_content, "private");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+/// Copying to a dest that is expected to be new must not follow a symlink that appeared there.
+fn copy_file_new_does_not_follow_symlink() {
+    let _ = env_logger::builder().try_init();
+    let dir = "copy_file_new_dir";
+
+    create_dir_all(dir).unwrap();
+    std::fs::write(format!("{dir}/source"), "source").unwrap();
+    std::fs::write(format!("{dir}/outside"), "outside").unwrap();
+    symlink("outside", format!("{dir}/dest")).unwrap();
+
+    let result = copy_file(
+        Path::new(&format!("{dir}/source")),
+        Path::new(&format!("{dir}/dest")),
+        true,
+    );
+
+    let outside = std::fs::read_to_string(format!("{dir}/outside")).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::AlreadyExists);
+    assert_eq!(outside, "outside", "File was written through a symlink");
+}

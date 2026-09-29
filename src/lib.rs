@@ -22,7 +22,8 @@
 
 use log::*;
 // use rayon::prelude::*;
-use std::fs::{copy, read_link};
+use std::collections::HashSet;
+use std::fs::{read_link, Metadata};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -101,23 +102,15 @@ impl std::fmt::Debug for CopyBuilder {
     }
 }
 
-/// Determine if the modification date of file_a is newer than that of file_b
-fn is_file_newer(file_a: &Path, file_b: &Path) -> bool {
-    match (file_a.symlink_metadata(), file_b.symlink_metadata()) {
-        (Ok(meta_a), Ok(meta_b)) => {
-            meta_a.modified().unwrap_or_else(|_| SystemTime::now())
-                > meta_b.modified().unwrap_or(SystemTime::UNIX_EPOCH)
-        }
-        _ => false,
-    }
+/// Determine if the modification date of meta_a is newer than that of meta_b
+fn is_file_newer(meta_a: &Metadata, meta_b: &Metadata) -> bool {
+    meta_a.modified().unwrap_or_else(|_| SystemTime::now())
+        > meta_b.modified().unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-/// Determine if file_a and file_b's size differs.
-fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
-    match (file_a.symlink_metadata(), file_b.symlink_metadata()) {
-        (Ok(meta_a), Ok(meta_b)) => meta_a.len() != meta_b.len(),
-        _ => false,
-    }
+/// Determine if the size of meta_a and meta_b differs.
+fn is_filesize_different(meta_a: &Metadata, meta_b: &Metadata) -> bool {
+    meta_a.len() != meta_b.len()
 }
 
 /// Determine if path is a symlink, without following it.
@@ -166,6 +159,40 @@ fn create_symlink(_original: &Path, _target: &Path, _link: &Path) -> Result<(), 
         ErrorKind::Unsupported,
         "Symlinks are not supported on this platform",
     ))
+}
+
+/// Copy a regular file, including its permissions. `dest_is_new` means nothing exists at dest.
+///
+/// On Linux, a new dest is created exclusively, which fails instead of following a symlink that
+/// appeared in the meantime. Permissions are only set if creating dest did not already result in them,
+/// which saves a syscall per file compared to `std::fs::copy`.
+#[cfg(target_os = "linux")]
+fn copy_file(source: &Path, dest: &Path, dest_is_new: bool) -> Result<(), Error> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut reader = std::fs::File::open(source)?;
+    let permissions = reader.metadata()?.permissions();
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).mode(permissions.mode());
+    if dest_is_new {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
+    let mut writer = options.open(dest)?;
+    // The mode is restricted by the umask on creation, and not applied at all to existing files
+    let writer_meta = writer.metadata()?;
+    if writer_meta.is_file() && writer_meta.permissions().mode() != permissions.mode() {
+        writer.set_permissions(permissions)?;
+    }
+    // Uses copy_file_range, like std::fs::copy
+    std::io::copy(&mut reader, &mut writer)?;
+    Ok(())
+}
+
+/// Copy a regular file, including its permissions. `dest_is_new` means nothing exists at dest.
+#[cfg(not(target_os = "linux"))]
+fn copy_file(source: &Path, dest: &Path, _dest_is_new: bool) -> Result<(), Error> {
+    std::fs::copy(source, dest).map(|_| ())
 }
 
 /// Prefix an error with a description, usually containing the affected path. Keeps the error kind.
@@ -279,7 +306,8 @@ impl CopyBuilder {
                 format!("Source {} is not a directory", self.source.display()),
             ));
         }
-        if !self.destination.is_dir() {
+        let dest_created = !self.destination.is_dir();
+        if dest_created {
             debug!("MKDIR {:?}", &self.destination);
             std::fs::create_dir_all(&self.destination).map_err(|e| {
                 context(
@@ -302,6 +330,15 @@ impl CopyBuilder {
             abs_source.display(),
             abs_dest.display()
         );
+
+        // Directories created by this run. Nothing can exist in them yet, which saves looking up dest.
+        // Only used on Linux, where new files are created exclusively and can't follow a symlink
+        // that appeared in the meantime.
+        let track_fresh_dirs = cfg!(target_os = "linux");
+        let mut fresh_dirs: HashSet<PathBuf> = HashSet::new();
+        if track_fresh_dirs && dest_created {
+            fresh_dirs.insert(abs_dest.clone());
+        }
 
         // Skip dest if it is inside source, and excluded entries including their contents
         let walk = || {
@@ -330,10 +367,12 @@ impl CopyBuilder {
                 Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
             })?;
             let dest_entry = abs_dest.join(rel_dest);
+            let in_fresh_dir = !fresh_dirs.is_empty()
+                && dest_entry
+                    .parent()
+                    .map_or(false, |parent| fresh_dirs.contains(parent));
 
-            if entry.path().symlink_metadata().is_ok() && !entry.file_type().is_dir() {
-                // the source exists, but isn't a directory
-
+            if !entry.file_type().is_dir() {
                 if !entry.file_type().is_file() && !entry.file_type().is_symlink() {
                     // Sockets, fifos and devices can't be copied meaningfully
                     warn!(
@@ -344,22 +383,28 @@ impl CopyBuilder {
                     continue;
                 }
 
+                if !self.is_included(rel_dest) {
+                    continue;
+                }
+
+                // Look up dest only once, the result is used for all checks below
+                let dest_meta = if in_fresh_dir {
+                    None
+                } else {
+                    dest_entry.symlink_metadata().ok()
+                };
+                let dest_exists = dest_meta.is_some();
+
                 // Early out if target is present and overwrite is off
                 if !self.overwrite_all
-                    && dest_entry.symlink_metadata().is_ok()
+                    && dest_exists
                     && !self.overwrite_if_newer
                     && !self.overwrite_if_size_differs
                 {
                     continue;
                 }
 
-                if !self.is_included(rel_dest) {
-                    continue;
-                }
-
                 // File is not present: copy it in any case
-                let dest_exists = dest_entry.symlink_metadata().is_ok();
-
                 if !dest_exists {
                     debug!(
                         "Dest not present: CP {} DST {}",
@@ -370,13 +415,19 @@ impl CopyBuilder {
 
                 // Conditional overwrite checks (OR semantics: copy if any enabled condition matches).
                 // overwrite_all takes precedence over them.
-                if !self.overwrite_all
-                    && dest_exists
-                    && (self.overwrite_if_newer || self.overwrite_if_size_differs)
-                {
-                    let newer = self.overwrite_if_newer && is_file_newer(entry.path(), &dest_entry);
-                    let size_differs = self.overwrite_if_size_differs
-                        && is_filesize_different(entry.path(), &dest_entry);
+                if let (false, Some(dest_meta), true) = (
+                    self.overwrite_all,
+                    &dest_meta,
+                    self.overwrite_if_newer || self.overwrite_if_size_differs,
+                ) {
+                    let (newer, size_differs) = match entry.metadata() {
+                        Ok(source_meta) => (
+                            self.overwrite_if_newer && is_file_newer(&source_meta, dest_meta),
+                            self.overwrite_if_size_differs
+                                && is_filesize_different(&source_meta, dest_meta),
+                        ),
+                        Err(_) => (false, false),
+                    };
                     if newer {
                         debug!(
                             "Source newer: CP {} DST {}",
@@ -413,14 +464,16 @@ impl CopyBuilder {
                 }
 
                 if entry.file_type().is_file() {
+                    let mut dest_is_new = !dest_exists;
                     // Never write through a symlink in dest, as it may point outside of it
-                    if is_symlink(&dest_entry) {
+                    if dest_meta.map_or(false, |m| m.file_type().is_symlink()) {
                         debug!("RM LNK {}", dest_entry.display());
                         remove_symlink(&dest_entry)?;
+                        dest_is_new = true;
                     }
                     // The regular copy operation
                     debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
-                    copy(entry.path(), &dest_entry).map_err(|e| {
+                    copy_file(entry.path(), &dest_entry, dest_is_new).map_err(|e| {
                         context(
                             e,
                             format!(
@@ -458,8 +511,16 @@ impl CopyBuilder {
                         )
                     })?;
                 }
-            } else if entry.path().is_dir() {
-                if is_symlink(&dest_entry) {
+            } else {
+                let mut dest_meta = if in_fresh_dir {
+                    None
+                } else {
+                    dest_entry.symlink_metadata().ok()
+                };
+                if dest_meta
+                    .as_ref()
+                    .map_or(false, |m| m.file_type().is_symlink())
+                {
                     // Copying into a symlinked dir could write outside of dest
                     if !self.overwrite_all {
                         return Err(Error::new(
@@ -473,9 +534,10 @@ impl CopyBuilder {
                     }
                     debug!("RM LNK {}", dest_entry.display());
                     remove_symlink(&dest_entry)?;
+                    dest_meta = None;
                 }
                 // With include filters, only matching directories are created here
-                if !dest_entry.is_dir() && self.is_included(rel_dest) {
+                if !dest_meta.map_or(false, |m| m.is_dir()) && self.is_included(rel_dest) {
                     debug!("MKDIR {}", entry.path().display());
                     std::fs::create_dir_all(&dest_entry).map_err(|e| {
                         context(
@@ -483,6 +545,9 @@ impl CopyBuilder {
                             format!("Could not create directory {}", dest_entry.display()),
                         )
                     })?;
+                    if track_fresh_dirs {
+                        fresh_dirs.insert(dest_entry);
+                    }
                 }
             }
         }
