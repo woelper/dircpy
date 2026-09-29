@@ -401,3 +401,148 @@ fn overwrite_or_newer_same_size() {
     std::fs::remove_dir_all(source_dir).unwrap();
     std::fs::remove_dir_all(dest_dir).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+/// A symlink already present in dest must be replaced, not written through.
+fn overwrite_does_not_follow_dest_symlink() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "no_follow_src";
+    let dest_dir = "no_follow_dest";
+    let outside_dir = "no_follow_outside";
+
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    create_dir_all(outside_dir).unwrap();
+    let outside_abs = Path::new(outside_dir).canonicalize().unwrap();
+
+    std::fs::write(format!("{source_dir}/file"), "source").unwrap();
+    std::fs::write(format!("{source_dir}/sub/nested"), "source").unwrap();
+    std::fs::write(format!("{outside_dir}/file"), "outside").unwrap();
+
+    // dest/file points at a file outside of dest, dest/sub at a directory outside of dest
+    symlink(outside_abs.join("file"), format!("{dest_dir}/file")).unwrap();
+    symlink(&outside_abs, format!("{dest_dir}/sub")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .run()
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(format!("{outside_dir}/file")).unwrap(),
+        "outside",
+        "File outside of dest was overwritten through a symlink"
+    );
+    assert!(
+        !Path::new(&format!("{outside_dir}/nested")).exists(),
+        "File was copied into a directory outside of dest through a symlink"
+    );
+    assert!(Path::new(&format!("{dest_dir}/file"))
+        .symlink_metadata()
+        .unwrap()
+        .is_file());
+    assert_eq!(
+        std::fs::read_to_string(format!("{dest_dir}/file")).unwrap(),
+        "source"
+    );
+    assert!(Path::new(&format!("{dest_dir}/sub"))
+        .symlink_metadata()
+        .unwrap()
+        .is_dir());
+    assert_eq!(
+        std::fs::read_to_string(format!("{dest_dir}/sub/nested")).unwrap(),
+        "source"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    std::fs::remove_dir_all(outside_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+/// Copying a symlink over an existing one must replace it instead of failing.
+fn overwrite_existing_symlink() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "overwrite_symlink_src";
+    let dest_dir = "overwrite_symlink_dest";
+
+    create_dir_all(source_dir).unwrap();
+    symlink("old_target", format!("{source_dir}/link")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir).run().unwrap();
+
+    std::fs::remove_file(format!("{source_dir}/link")).unwrap();
+    symlink("new_target", format!("{source_dir}/link")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .run()
+        .unwrap();
+    assert_eq!(
+        read_link(format!("{dest_dir}/link")).unwrap(),
+        Path::new("new_target")
+    );
+
+    // conditional overwrite must work as well: "old_target_x" differs in size
+    std::fs::remove_file(format!("{source_dir}/link")).unwrap();
+    symlink("old_target_x", format!("{source_dir}/link")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+    assert_eq!(
+        read_link(format!("{dest_dir}/link")).unwrap(),
+        Path::new("old_target_x")
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[test]
+/// `overwrite(true)` must win even if a conditional overwrite would not copy.
+fn overwrite_all_with_conditional_flags() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "overwrite_all_cond_src";
+    let dest_dir = "overwrite_all_cond_dest";
+
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+
+    // same size, dest is newer: neither condition matches
+    std::fs::write(format!("{source_dir}/file"), "SRC").unwrap();
+    std::fs::write(format!("{dest_dir}/file"), "DST").unwrap();
+    let now = SystemTime::now();
+    File::options()
+        .write(true)
+        .open(format!("{source_dir}/file"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(3600))
+        .unwrap();
+    File::options()
+        .write(true)
+        .open(format!("{dest_dir}/file"))
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(format!("{dest_dir}/file")).unwrap(),
+        "SRC",
+        "overwrite(true) was ignored because conditional flags were set"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}

@@ -122,6 +122,25 @@ fn is_filesize_different(file_a: &Path, file_b: &Path) -> bool {
     }
 }
 
+/// Determine if path is a symlink, without following it.
+fn is_symlink(path: &Path) -> bool {
+    path.symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+/// Remove a file or symlink without following it. On Windows, symlinks
+/// to directories need to be removed with `remove_dir`.
+fn remove_symlink(path: &Path) -> Result<(), std::io::Error> {
+    std::fs::remove_file(path).or_else(|e| {
+        if cfg!(windows) && is_symlink(path) {
+            std::fs::remove_dir(path)
+        } else {
+            Err(e)
+        }
+    })
+}
+
 impl CopyBuilder {
     /// Construct a new CopyBuilder with `source` and `dest`.
     pub fn new<P: AsRef<Path>, Q: AsRef<Path>>(source: P, dest: Q) -> CopyBuilder {
@@ -271,8 +290,12 @@ impl CopyBuilder {
                     );
                 }
 
-                // Conditional overwrite checks (OR semantics: copy if any enabled condition matches)
-                if dest_exists && (self.overwrite_if_newer || self.overwrite_if_size_differs) {
+                // Conditional overwrite checks (OR semantics: copy if any enabled condition matches).
+                // overwrite_all takes precedence over them.
+                if !self.overwrite_all
+                    && dest_exists
+                    && (self.overwrite_if_newer || self.overwrite_if_size_differs)
+                {
                     let newer = self.overwrite_if_newer && is_file_newer(entry.path(), &dest_entry);
                     let size_differs = self.overwrite_if_size_differs
                         && is_filesize_different(entry.path(), &dest_entry);
@@ -296,6 +319,11 @@ impl CopyBuilder {
                 }
 
                 if entry.file_type().is_file() {
+                    // Never write through a symlink in dest, as it may point outside of it
+                    if is_symlink(&dest_entry) {
+                        debug!("RM LNK {}", dest_entry.display());
+                        remove_symlink(&dest_entry)?;
+                    }
                     // The regular copy operation
                     debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
                     copy(entry.path(), dest_entry)?;
@@ -307,7 +335,14 @@ impl CopyBuilder {
                     );
                     let target = read_link(entry.path())?;
                     #[cfg(unix)]
-                    std::os::unix::fs::symlink(target, dest_entry)?
+                    {
+                        // Creating a symlink fails if dest is already present
+                        if dest_exists {
+                            debug!("RM {}", dest_entry.display());
+                            remove_symlink(&dest_entry)?;
+                        }
+                        std::os::unix::fs::symlink(target, dest_entry)?
+                    }
                 } else {
                     unimplemented!(
                         "File {} has unhandled type {:?}",
@@ -315,9 +350,26 @@ impl CopyBuilder {
                         entry.file_type()
                     );
                 }
-            } else if entry.path().is_dir() && !dest_entry.is_dir() {
-                debug!("MKDIR {}", entry.path().display());
-                std::fs::create_dir_all(dest_entry)?;
+            } else if entry.path().is_dir() {
+                if is_symlink(&dest_entry) {
+                    // Copying into a symlinked dir could write outside of dest
+                    if !self.overwrite_all {
+                        return Err(Error::new(
+                            ErrorKind::AlreadyExists,
+                            format!(
+                                "Destination {} is a symlink, refusing to copy directory {} into it",
+                                dest_entry.display(),
+                                entry.path().display()
+                            ),
+                        ));
+                    }
+                    debug!("RM LNK {}", dest_entry.display());
+                    remove_symlink(&dest_entry)?;
+                }
+                if !dest_entry.is_dir() {
+                    debug!("MKDIR {}", entry.path().display());
+                    std::fs::create_dir_all(dest_entry)?;
+                }
             }
         }
 
