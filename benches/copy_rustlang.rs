@@ -1,6 +1,5 @@
 use criterion::*;
 use dircpy::CopyBuilder;
-use env_logger;
 use log::*;
 use std::fs::File;
 use unzip::Unzipper;
@@ -64,7 +63,7 @@ fn test_cp(c: &mut Criterion) {
             std::process::Command::new("cp")
                 .arg("-r")
                 .arg(SOURCE)
-                .arg(&format!("{}{}", DEST, random_string()))
+                .arg(format!("{}{}", DEST, random_string()))
                 .output()
                 .unwrap();
         });
@@ -78,7 +77,7 @@ fn test_dircpy_single(c: &mut Criterion) {
         // Per-sample (note that a sample can be many iterations) setup goes here
         b.iter(|| {
             // Measured code goes here
-            CopyBuilder::new(&SOURCE, &format!("{}{}", DEST, random_string()))
+            CopyBuilder::new(SOURCE, format!("{}{}", DEST, random_string()))
                 .overwrite(true)
                 .run()
                 .unwrap();
@@ -98,7 +97,7 @@ fn test_lms(c: &mut Criterion) {
             std::process::Command::new("lms")
                 .arg("cp")
                 .arg(SOURCE)
-                .arg(&format!("{}{}", DEST, random_string()))
+                .arg(format!("{}{}", DEST, random_string()))
                 .output()
                 .unwrap();
         });

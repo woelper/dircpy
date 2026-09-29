@@ -1,0 +1,26 @@
+on: [push]
+
+name: MSRV
+
+jobs:
+  msrv:
+    name: Check minimum Rust version on ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      # Keep in sync with rust-version in Cargo.toml
+      - uses: dtolnay/rust-toolchain@1.64.0
+      # The dev-dependencies need a newer Rust, so check dircpy the way dependents build it:
+      # from a crate depending on it. Newer log versions require Rust 1.71, so pin an older one.
+      - name: Check as a dependency
+        shell: bash
+        run: |
+          cargo new --lib "$RUNNER_TEMP/msrv-check"
+          cd "$RUNNER_TEMP/msrv-check"
+          echo "dircpy = { path = '$GITHUB_WORKSPACE' }" >> Cargo.toml
+          cargo generate-lockfile
+          cargo update -p log --precise 0.4.20
+          cargo check

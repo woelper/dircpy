@@ -14,6 +14,7 @@ Errors now contain the affected paths
 Copying a directory onto a symlink in the destination now returns an error unless `overwrite(true)` is set
 Deprecate `run_par`. It is now a wrapper around `run`
 Remove the jwalk dependency. The `jwalk` feature is kept for compatibility, but has no effect
+Switch to edition 2021 and declare the minimum Rust version (1.64), checked in CI
 Fix wrong documentation for filters, progress callback and `overwrite_if_newer`
 More tests
 0.3.19:

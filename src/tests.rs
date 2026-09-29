@@ -212,14 +212,14 @@ fn copy_cargo() {
     unzip::Unzipper::new(reader, sample_dir)
         .unzip()
         .expect("Could not expand cargo sources");
-    let num_input_files = WalkDir::new(&sample_dir)
+    let num_input_files = WalkDir::new(sample_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .count();
 
     CopyBuilder::new(
-        &Path::new(sample_dir).canonicalize().unwrap(),
-        &PathBuf::from(&output_dir),
+        Path::new(sample_dir).canonicalize().unwrap(),
+        PathBuf::from(&output_dir),
     )
     .run()
     .unwrap();
@@ -256,14 +256,14 @@ fn copy_cargo_progress() {
     unzip::Unzipper::new(reader, &sample_dir)
         .unzip()
         .expect("Could not expand cargo sources");
-    let num_input_files = WalkDir::new(&sample_dir)
+    let num_input_files = WalkDir::new(sample_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .count();
 
     CopyBuilder::new(
-        &Path::new(&sample_dir).canonicalize().unwrap(),
-        &PathBuf::from(&output_dir),
+        Path::new(&sample_dir).canonicalize().unwrap(),
+        PathBuf::from(&output_dir),
     )
     .with_progress(|all, done| {
         info!("copied {done}/{all}");

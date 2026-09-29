@@ -67,7 +67,6 @@ type ProgressFn = Arc<dyn Fn(usize, usize)>;
 ///.unwrap();
 ///
 /// ```
-
 pub struct CopyBuilder {
     /// The source directory
     pub source: PathBuf,
