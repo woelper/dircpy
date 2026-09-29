@@ -131,13 +131,47 @@ fn is_symlink(path: &Path) -> bool {
 /// Remove a file or symlink without following it. On Windows, symlinks
 /// to directories need to be removed with `remove_dir`.
 fn remove_symlink(path: &Path) -> Result<(), std::io::Error> {
-    std::fs::remove_file(path).or_else(|e| {
-        if cfg!(windows) && is_symlink(path) {
-            std::fs::remove_dir(path)
-        } else {
-            Err(e)
-        }
-    })
+    std::fs::remove_file(path)
+        .or_else(|e| {
+            if cfg!(windows) && is_symlink(path) {
+                std::fs::remove_dir(path)
+            } else {
+                Err(e)
+            }
+        })
+        .map_err(|e| context(e, format!("Could not remove {}", path.display())))
+}
+
+/// Create a symlink at `link` pointing to `target`. `original` is the symlink being copied.
+#[cfg(unix)]
+fn create_symlink(_original: &Path, target: &Path, link: &Path) -> Result<(), std::io::Error> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// Create a symlink at `link` pointing to `target`. `original` is the symlink being copied.
+/// Windows distinguishes between file and directory symlinks, so the type of `original` is used.
+#[cfg(windows)]
+fn create_symlink(original: &Path, target: &Path, link: &Path) -> Result<(), std::io::Error> {
+    use std::os::windows::fs::FileTypeExt;
+    if original.symlink_metadata()?.file_type().is_symlink_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
+/// Create a symlink at `link` pointing to `target`. `original` is the symlink being copied.
+#[cfg(not(any(unix, windows)))]
+fn create_symlink(_original: &Path, _target: &Path, _link: &Path) -> Result<(), std::io::Error> {
+    Err(Error::new(
+        ErrorKind::Unsupported,
+        "Symlinks are not supported on this platform",
+    ))
+}
+
+/// Prefix an error with a description, usually containing the affected path. Keeps the error kind.
+fn context(e: Error, description: String) -> Error {
+    Error::new(e.kind(), format!("{description}: {e}"))
 }
 
 impl CopyBuilder {
@@ -192,7 +226,7 @@ impl CopyBuilder {
         }
     }
 
-    /// Do not copy files whose path contains this string.
+    /// Do not copy files and directories whose path relative to source contains this string.
     pub fn with_exclude_filter(self, f: &str) -> CopyBuilder {
         let mut filters = self.exclude_filters.clone();
         filters.push(f.to_owned());
@@ -202,7 +236,8 @@ impl CopyBuilder {
         }
     }
 
-    /// Only copy files whose path contains this string.
+    /// Only copy files whose path relative to source contains this string.
+    /// Directories are only created if they match, or if a file in them is copied.
     pub fn with_include_filter(self, f: &str) -> CopyBuilder {
         let mut filters = self.include_filters.clone();
         filters.push(f.to_owned());
@@ -211,36 +246,80 @@ impl CopyBuilder {
             ..self
         }
     }
+
+    /// Determine if a path relative to source matches an exclude filter
+    fn is_excluded(&self, rel_path: &Path) -> bool {
+        let rel_path = rel_path.to_string_lossy();
+        self.exclude_filters
+            .iter()
+            .any(|f| rel_path.contains(f.as_str()))
+    }
+
+    /// Determine if a path relative to source matches an include filter, or if there are none
+    fn is_included(&self, rel_path: &Path) -> bool {
+        let rel_path = rel_path.to_string_lossy();
+        self.include_filters.is_empty()
+            || self
+                .include_filters
+                .iter()
+                .any(|f| rel_path.contains(f.as_str()))
+    }
+
     /// Execute the copy operation
     pub fn run(&self) -> Result<(), std::io::Error> {
         // Resolve source first, so dest is not created if source is missing
-        let abs_source = self.source.canonicalize()?;
+        let abs_source = self.source.canonicalize().map_err(|e| {
+            context(
+                e,
+                format!("Could not read source {}", self.source.display()),
+            )
+        })?;
+        if !abs_source.is_dir() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("Source {} is not a directory", self.source.display()),
+            ));
+        }
         if !self.destination.is_dir() {
             debug!("MKDIR {:?}", &self.destination);
-            std::fs::create_dir_all(&self.destination)?;
+            std::fs::create_dir_all(&self.destination).map_err(|e| {
+                context(
+                    e,
+                    format!(
+                        "Could not create destination {}",
+                        self.destination.display()
+                    ),
+                )
+            })?;
         }
-        let abs_dest = self.destination.canonicalize()?;
+        let abs_dest = self.destination.canonicalize().map_err(|e| {
+            context(
+                e,
+                format!("Could not read destination {}", self.destination.display()),
+            )
+        })?;
         debug!(
             "Building copy operation: SRC {} DST {}",
             abs_source.display(),
             abs_dest.display()
         );
 
+        // Skip dest if it is inside source, and excluded entries including their contents
+        let walk = || {
+            WalkDir::new(&abs_source).into_iter().filter_entry(|e| {
+                e.path() != abs_dest
+                    && !self.is_excluded(e.path().strip_prefix(&abs_source).unwrap_or(e.path()))
+            })
+        };
+
         let mut num_files_total = 1;
         let mut num_files_processed = 0;
 
         if self.progress_callback.is_some() {
-            num_files_total = WalkDir::new(&abs_source)
-                .into_iter()
-                .filter_entry(|e| e.path() != abs_dest)
-                .filter_map(|e| e.ok())
-                .count();
+            num_files_total = walk().filter_map(|e| e.ok()).count();
         }
 
-        'files: for entry in WalkDir::new(&abs_source)
-            .into_iter()
-            .filter_entry(|e| e.path() != abs_dest)
-        {
+        for entry in walk() {
             // Don't ignore errors, as this would silently result in an incomplete copy
             let entry = entry?;
             if let Some(cb) = &self.progress_callback {
@@ -256,6 +335,16 @@ impl CopyBuilder {
             if entry.path().symlink_metadata().is_ok() && !entry.file_type().is_dir() {
                 // the source exists, but isn't a directory
 
+                if !entry.file_type().is_file() && !entry.file_type().is_symlink() {
+                    // Sockets, fifos and devices can't be copied meaningfully
+                    warn!(
+                        "Skipping {}: unsupported file type {:?}",
+                        entry.path().display(),
+                        entry.file_type()
+                    );
+                    continue;
+                }
+
                 // Early out if target is present and overwrite is off
                 if !self.overwrite_all
                     && dest_entry.symlink_metadata().is_ok()
@@ -265,21 +354,8 @@ impl CopyBuilder {
                     continue;
                 }
 
-                // Filters only apply to the path relative to source
-                let rel_path = rel_dest.to_string_lossy();
-
-                for f in &self.exclude_filters {
-                    debug!("EXCL {} for {:?}", f, entry);
-
-                    if rel_path.contains(f) {
-                        continue 'files;
-                    }
-                }
-
-                if !self.include_filters.is_empty()
-                    && !self.include_filters.iter().any(|f| rel_path.contains(f))
-                {
-                    continue 'files;
+                if !self.is_included(rel_dest) {
+                    continue;
                 }
 
                 // File is not present: copy it in any case
@@ -321,6 +397,22 @@ impl CopyBuilder {
                     }
                 }
 
+                // With include filters, directories are only created once a file in them is copied.
+                // They were checked for symlinks already, as directories are visited before their contents.
+                if !self.include_filters.is_empty() {
+                    if let Some(parent) = dest_entry.parent() {
+                        if !parent.is_dir() {
+                            debug!("MKDIR {}", parent.display());
+                            std::fs::create_dir_all(parent).map_err(|e| {
+                                context(
+                                    e,
+                                    format!("Could not create directory {}", parent.display()),
+                                )
+                            })?;
+                        }
+                    }
+                }
+
                 if entry.file_type().is_file() {
                     // Never write through a symlink in dest, as it may point outside of it
                     if is_symlink(&dest_entry) {
@@ -329,30 +421,43 @@ impl CopyBuilder {
                     }
                     // The regular copy operation
                     debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
-                    copy(entry.path(), dest_entry)?;
-                } else if entry.file_type().is_symlink() {
+                    copy(entry.path(), &dest_entry).map_err(|e| {
+                        context(
+                            e,
+                            format!(
+                                "Could not copy {} to {}",
+                                entry.path().display(),
+                                dest_entry.display()
+                            ),
+                        )
+                    })?;
+                } else {
                     debug!(
                         "CP LNK {} DST {}",
                         entry.path().display(),
                         dest_entry.display()
                     );
-                    let target = read_link(entry.path())?;
-                    #[cfg(unix)]
-                    {
-                        // Creating a symlink fails if dest is already present
-                        if dest_exists {
-                            debug!("RM {}", dest_entry.display());
-                            remove_symlink(&dest_entry)?;
-                        }
-                        std::os::unix::fs::symlink(target, dest_entry)?
+                    let target = read_link(entry.path()).map_err(|e| {
+                        context(
+                            e,
+                            format!("Could not read symlink {}", entry.path().display()),
+                        )
+                    })?;
+                    // Creating a symlink fails if dest is already present
+                    if dest_exists {
+                        debug!("RM {}", dest_entry.display());
+                        remove_symlink(&dest_entry)?;
                     }
-                } else {
-                    // Sockets, fifos and devices can't be copied meaningfully
-                    warn!(
-                        "Skipping {}: unsupported file type {:?}",
-                        entry.path().display(),
-                        entry.file_type()
-                    );
+                    create_symlink(entry.path(), &target, &dest_entry).map_err(|e| {
+                        context(
+                            e,
+                            format!(
+                                "Could not create symlink {} to {}",
+                                dest_entry.display(),
+                                target.display()
+                            ),
+                        )
+                    })?;
                 }
             } else if entry.path().is_dir() {
                 if is_symlink(&dest_entry) {
@@ -370,9 +475,15 @@ impl CopyBuilder {
                     debug!("RM LNK {}", dest_entry.display());
                     remove_symlink(&dest_entry)?;
                 }
-                if !dest_entry.is_dir() {
+                // With include filters, only matching directories are created here
+                if !dest_entry.is_dir() && self.is_included(rel_dest) {
                     debug!("MKDIR {}", entry.path().display());
-                    std::fs::create_dir_all(dest_entry)?;
+                    std::fs::create_dir_all(&dest_entry).map_err(|e| {
+                        context(
+                            e,
+                            format!("Could not create directory {}", dest_entry.display()),
+                        )
+                    })?;
                 }
             }
         }

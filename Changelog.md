@@ -7,6 +7,10 @@ Fix: special files (sockets, fifos, devices) caused a panic. They are now skippe
 Fix: a missing source directory still created the destination
 Fix: errors while reading the source (e.g. permission denied) were ignored, resulting in an incomplete copy. They are now returned
 Fix: include and exclude filters also matched the source path itself. They now only match the path relative to the source
+Fix: a file as source did nothing and returned Ok. It now returns an error
+Fix: symlinks were silently not copied on Windows. Creating them requires developer mode or admin rights, otherwise an error is returned
+Fix: filters did not apply to directories. Excluded directories are skipped entirely. With include filters, only directories that match or contain copied files are created
+Errors now contain the affected paths
 Copying a directory onto a symlink in the destination now returns an error unless `overwrite(true)` is set
 Deprecate `run_par`. It is now a wrapper around `run`
 Remove the jwalk dependency. The `jwalk` feature is kept for compatibility, but has no effect

@@ -527,7 +527,7 @@ fn skip_special_files() {
 
     let result = CopyBuilder::new(source_dir, dest_dir).run();
 
-    assert!(result.is_ok(), "Copy failed: {result:?}");
+    assert!(result.is_ok(), "Copy failed: {:?}", result);
     assert!(Path::new(&format!("{dest_dir}/file")).is_file());
     assert!(Path::new(&format!("{dest_dir}/socket"))
         .symlink_metadata()
@@ -636,5 +636,143 @@ fn filters_match_relative_path() {
     assert!(
         !sub_a && sub_b,
         "Include filter did not match a relative directory"
+    );
+}
+
+#[test]
+/// A file as source must fail without creating the destination.
+fn file_source_fails() {
+    let _ = env_logger::builder().try_init();
+    let source_file = "file_source";
+    let dest_dir = "file_source_dest";
+
+    File::create(source_file).unwrap();
+
+    let result = CopyBuilder::new(source_file, dest_dir).run();
+
+    let dest_created = Path::new(dest_dir).exists();
+    std::fs::remove_file(source_file).unwrap();
+    let _ = std::fs::remove_dir_all(dest_dir);
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    assert!(!dest_created, "Destination was created for a file source");
+}
+
+#[test]
+/// Directories must not be created if they are excluded or don't match an include filter.
+fn filters_apply_to_directories() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "dir_filter_src";
+    let dest_exclude = "dir_filter_exclude_dest";
+    let dest_include = "dir_filter_include_dest";
+
+    create_dir_all(format!("{source_dir}/skipme/nested")).unwrap();
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    create_dir_all(format!("{source_dir}/other")).unwrap();
+    create_dir_all(format!("{source_dir}/empty")).unwrap();
+    create_dir_all(format!("{source_dir}/keep_empty")).unwrap();
+    File::create(format!("{source_dir}/a.txt")).unwrap();
+    File::create(format!("{source_dir}/sub/b.txt")).unwrap();
+    File::create(format!("{source_dir}/other/c.log")).unwrap();
+    File::create(format!("{source_dir}/skipme/nested/d.txt")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_exclude)
+        .with_exclude_filter("skipme")
+        .run()
+        .unwrap();
+    CopyBuilder::new(source_dir, dest_include)
+        .with_include_filter(".txt")
+        .with_include_filter("keep")
+        .run()
+        .unwrap();
+
+    let exists = |p: &str| Path::new(p).exists();
+    let excluded_skipme = exists(&format!("{dest_exclude}/skipme"));
+    let excluded_sub = exists(&format!("{dest_exclude}/sub/b.txt"));
+    let included_a = exists(&format!("{dest_include}/a.txt"));
+    let included_b = exists(&format!("{dest_include}/sub/b.txt"));
+    let included_d = exists(&format!("{dest_include}/skipme/nested/d.txt"));
+    let included_other = exists(&format!("{dest_include}/other"));
+    let included_empty = exists(&format!("{dest_include}/empty"));
+    let included_keep = exists(&format!("{dest_include}/keep_empty"));
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_exclude).unwrap();
+    std::fs::remove_dir_all(dest_include).unwrap();
+
+    assert!(!excluded_skipme, "Excluded directory was created");
+    assert!(
+        excluded_sub,
+        "Directory that is not excluded was not copied"
+    );
+    assert!(
+        included_a && included_b && included_d,
+        "Included files in subdirectories were not copied"
+    );
+    assert!(
+        !included_other,
+        "Directory without included files was created"
+    );
+    assert!(
+        !included_empty,
+        "Empty directory not matching include was created"
+    );
+    assert!(
+        included_keep,
+        "Directory matching include filter was not created"
+    );
+}
+
+#[test]
+/// Errors must mention the path they occurred on.
+fn errors_contain_path() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "error_path_src";
+    let dest_dir = "error_path_dest";
+
+    create_dir_all(source_dir).unwrap();
+    File::create(format!("{source_dir}/file")).unwrap();
+    // A directory in dest where source has a file makes the copy fail
+    create_dir_all(format!("{dest_dir}/file")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir).overwrite(true).run();
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains(&format!("{source_dir}{}file", std::path::MAIN_SEPARATOR)),
+        "Error does not contain the path: {}",
+        message
+    );
+}
+
+#[cfg(windows)]
+#[test]
+/// Symlinks to files and directories must be copied on Windows as well.
+fn copy_symlinks_windows() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let _ = env_logger::builder().try_init();
+    let source_dir = "win_symlink_src";
+    let dest_dir = "win_symlink_dest";
+
+    create_dir_all(format!("{source_dir}/dir")).unwrap();
+    File::create(format!("{source_dir}/file")).unwrap();
+    symlink_file("file", format!("{source_dir}/file_link")).unwrap();
+    symlink_dir("dir", format!("{source_dir}/dir_link")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    let file_link = read_link(format!("{dest_dir}/file_link"));
+    let dir_link = read_link(format!("{dest_dir}/dir_link"));
+    let dir_link_is_dir = Path::new(&format!("{dest_dir}/dir_link")).is_dir();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    let _ = std::fs::remove_dir_all(dest_dir);
+
+    result.unwrap();
+    assert_eq!(file_link.unwrap(), Path::new("file"));
+    assert_eq!(dir_link.unwrap(), Path::new("dir"));
+    assert!(
+        dir_link_is_dir,
+        "Directory symlink was created as file symlink"
     );
 }
