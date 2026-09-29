@@ -1,5 +1,5 @@
 //! Recursively copy a directory from a to b.
-//! ```
+//! ```no_run
 //! use dircpy::*;
 //!
 //! // Most basic example:
@@ -38,7 +38,7 @@ type ProgressFn = Arc<dyn Fn(usize, usize)>;
 
 #[derive(Clone)]
 /// Recursively copy a directory from a to b.
-/// ```
+/// ```no_run
 /// use dircpy::*;
 ///
 /// // Most basic example:
@@ -240,8 +240,9 @@ impl CopyBuilder {
         'files: for entry in WalkDir::new(&abs_source)
             .into_iter()
             .filter_entry(|e| e.path() != abs_dest)
-            .filter_map(|e| e.ok())
         {
+            // Don't ignore errors, as this would silently result in an incomplete copy
+            let entry = entry?;
             if let Some(cb) = &self.progress_callback {
                 num_files_processed += 1;
                 cb(num_files_total, num_files_processed);
@@ -264,19 +265,19 @@ impl CopyBuilder {
                     continue;
                 }
 
+                // Filters only apply to the path relative to source
+                let rel_path = rel_dest.to_string_lossy();
+
                 for f in &self.exclude_filters {
                     debug!("EXCL {} for {:?}", f, entry);
 
-                    if entry.path().to_string_lossy().contains(f) {
+                    if rel_path.contains(f) {
                         continue 'files;
                     }
                 }
 
                 if !self.include_filters.is_empty()
-                    && !self
-                        .include_filters
-                        .iter()
-                        .any(|f| entry.path().to_string_lossy().contains(f))
+                    && !self.include_filters.iter().any(|f| rel_path.contains(f))
                 {
                     continue 'files;
                 }

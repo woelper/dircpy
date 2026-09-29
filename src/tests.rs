@@ -554,3 +554,87 @@ fn missing_source_does_not_create_dest() {
         "Destination was created for a missing source"
     );
 }
+
+#[cfg(unix)]
+#[test]
+/// Errors while walking the source must be returned instead of being ignored.
+fn unreadable_source_dir_fails() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "unreadable_src";
+    let dest_dir = "unreadable_dest";
+    let locked = format!("{source_dir}/locked");
+
+    create_dir_all(&locked).unwrap();
+    File::create(format!("{locked}/file")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    // Permissions are not enforced for root, so there is nothing to test
+    let is_root = std::fs::read_dir(&locked).is_ok();
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    let _ = std::fs::remove_dir_all(dest_dir);
+
+    if is_root {
+        eprintln!("Skipping unreadable_source_dir_fails: running as root");
+        return;
+    }
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+}
+
+#[test]
+/// Filters must only match the path relative to the source, not the source itself.
+fn filters_match_relative_path() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "rel_filter_src";
+    let dest_exclude = "rel_filter_exclude_dest";
+    let dest_include = "rel_filter_include_dest";
+
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    File::create(format!("{source_dir}/a.txt")).unwrap();
+    File::create(format!("{source_dir}/sub/b.txt")).unwrap();
+
+    // "rel_filter" is only part of the source path, so nothing is excluded
+    CopyBuilder::new(source_dir, dest_exclude)
+        .with_exclude_filter("rel_filter")
+        .run()
+        .unwrap();
+    // ...and nothing is included
+    CopyBuilder::new(source_dir, dest_include)
+        .with_include_filter("rel_filter")
+        .run()
+        .unwrap();
+
+    let excluded_a = Path::new(&format!("{dest_exclude}/a.txt")).is_file();
+    let excluded_b = Path::new(&format!("{dest_exclude}/sub/b.txt")).is_file();
+    let included_a = Path::new(&format!("{dest_include}/a.txt")).exists();
+    let included_b = Path::new(&format!("{dest_include}/sub/b.txt")).exists();
+
+    // Directory parts of the relative path still match
+    let dest_sub = "rel_filter_sub_dest";
+    CopyBuilder::new(source_dir, dest_sub)
+        .with_include_filter("sub")
+        .run()
+        .unwrap();
+    let sub_a = Path::new(&format!("{dest_sub}/a.txt")).exists();
+    let sub_b = Path::new(&format!("{dest_sub}/sub/b.txt")).is_file();
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_exclude).unwrap();
+    std::fs::remove_dir_all(dest_include).unwrap();
+    std::fs::remove_dir_all(dest_sub).unwrap();
+
+    assert!(
+        excluded_a && excluded_b,
+        "Exclude filter matched the source path"
+    );
+    assert!(
+        !included_a && !included_b,
+        "Include filter matched the source path"
+    );
+    assert!(
+        !sub_a && sub_b,
+        "Include filter did not match a relative directory"
+    );
+}

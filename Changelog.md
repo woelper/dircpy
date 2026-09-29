@@ -5,6 +5,8 @@ Fix: overwriting could write through symlinks in the destination to locations ou
 Fix: copying over an existing symlink failed with "File exists"
 Fix: special files (sockets, fifos, devices) caused a panic. They are now skipped with a warning
 Fix: a missing source directory still created the destination
+Fix: errors while reading the source (e.g. permission denied) were ignored, resulting in an incomplete copy. They are now returned
+Fix: include and exclude filters also matched the source path itself. They now only match the path relative to the source
 Copying a directory onto a symlink in the destination now returns an error unless `overwrite(true)` is set
 Deprecate `run_par`. It is now a wrapper around `run`
 Remove the jwalk dependency. The `jwalk` feature is kept for compatibility, but has no effect
