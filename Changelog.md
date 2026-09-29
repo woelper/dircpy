@@ -3,6 +3,8 @@ Fix: files were not copied for some combinations of `overwrite_if_newer` and `ov
 Fix: `overwrite(true)` was ignored when conditional overwrite options were also set
 Fix: overwriting could write through symlinks in the destination to locations outside of it
 Fix: copying over an existing symlink failed with "File exists"
+Fix: special files (sockets, fifos, devices) caused a panic. They are now skipped with a warning
+Fix: a missing source directory still created the destination
 Copying a directory onto a symlink in the destination now returns an error unless `overwrite(true)` is set
 Deprecate `run_par`. It is now a wrapper around `run`
 Remove the jwalk dependency. The `jwalk` feature is kept for compatibility, but has no effect

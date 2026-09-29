@@ -213,11 +213,12 @@ impl CopyBuilder {
     }
     /// Execute the copy operation
     pub fn run(&self) -> Result<(), std::io::Error> {
+        // Resolve source first, so dest is not created if source is missing
+        let abs_source = self.source.canonicalize()?;
         if !self.destination.is_dir() {
             debug!("MKDIR {:?}", &self.destination);
             std::fs::create_dir_all(&self.destination)?;
         }
-        let abs_source = self.source.canonicalize()?;
         let abs_dest = self.destination.canonicalize()?;
         debug!(
             "Building copy operation: SRC {} DST {}",
@@ -345,8 +346,9 @@ impl CopyBuilder {
                         std::os::unix::fs::symlink(target, dest_entry)?
                     }
                 } else {
-                    unimplemented!(
-                        "File {} has unhandled type {:?}",
+                    // Sockets, fifos and devices can't be copied meaningfully
+                    warn!(
+                        "Skipping {}: unsupported file type {:?}",
                         entry.path().display(),
                         entry.file_type()
                     );

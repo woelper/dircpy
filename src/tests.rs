@@ -512,3 +512,45 @@ fn overwrite_all_with_conditional_flags() {
     std::fs::remove_dir_all(source_dir).unwrap();
     std::fs::remove_dir_all(dest_dir).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+/// Special files (sockets, fifos, devices) must be skipped instead of panicking.
+fn skip_special_files() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "special_src";
+    let dest_dir = "special_dest";
+
+    create_dir_all(source_dir).unwrap();
+    File::create(format!("{source_dir}/file")).unwrap();
+    let _socket = std::os::unix::net::UnixListener::bind(format!("{source_dir}/socket")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    assert!(result.is_ok(), "Copy failed: {result:?}");
+    assert!(Path::new(&format!("{dest_dir}/file")).is_file());
+    assert!(Path::new(&format!("{dest_dir}/socket"))
+        .symlink_metadata()
+        .is_err());
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[test]
+/// A missing source must fail without creating the destination.
+fn missing_source_does_not_create_dest() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "missing_src";
+    let dest_dir = "missing_src_dest";
+
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    let dest_created = Path::new(dest_dir).exists();
+    let _ = std::fs::remove_dir_all(dest_dir);
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
+    assert!(
+        !dest_created,
+        "Destination was created for a missing source"
+    );
+}
