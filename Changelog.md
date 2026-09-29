@@ -19,6 +19,7 @@ On Linux, new files are created exclusively, so a symlink appearing in the desti
 Switch to edition 2021 and declare the minimum Rust version (1.64), checked in CI
 Fix wrong documentation for filters, progress callback and `overwrite_if_newer`
 More tests
+Benchmarks use generated data, and compare `run` and `run_par` with `cp -r`
 0.3.19:
 Fix for empty include lists (Thanks @AdamLeyshon)
 Add test for empty include lists

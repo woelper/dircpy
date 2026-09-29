@@ -18,6 +18,11 @@
 //!.with_include_filter(".csv")
 //!.run()
 //!.unwrap();
+//!
+//! // Copy files with up to 4 threads, which is faster for many small files:
+//!CopyBuilder::new("src", "dest")
+//!.run_par()
+//!.unwrap();
 //! ```
 
 use log::*;
@@ -65,6 +70,11 @@ type ProgressFn = Arc<dyn Fn(usize, usize)>;
 ///    println!("copied {done}/{all}");
 ///})
 ///.run()
+///.unwrap();
+///
+/// // Copy files with up to 4 threads, which is faster for many small files:
+///CopyBuilder::new("src", "dest")
+///.run_par()
 ///.unwrap();
 ///
 /// ```
