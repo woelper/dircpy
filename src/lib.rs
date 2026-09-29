@@ -161,6 +161,70 @@ fn create_symlink(_original: &Path, _target: &Path, _link: &Path) -> Result<(), 
     ))
 }
 
+/// Reports progress of a copy operation
+struct Progress<'a> {
+    callback: Option<&'a ProgressFn>,
+    total: usize,
+    processed: usize,
+}
+
+impl Progress<'_> {
+    /// Report that an entry has been processed
+    fn step(&mut self) {
+        if let Some(callback) = self.callback {
+            self.processed += 1;
+            callback(self.total, self.processed);
+        }
+    }
+}
+
+/// A file operation, created while walking the source
+enum Job {
+    /// Copy a regular file
+    Copy {
+        source: PathBuf,
+        dest: PathBuf,
+        dest_is_new: bool,
+    },
+    /// Create a symlink at `link` pointing to `target`, as a copy of `original`
+    Symlink {
+        original: PathBuf,
+        target: PathBuf,
+        link: PathBuf,
+    },
+}
+
+impl Job {
+    fn execute(&self) -> Result<(), Error> {
+        match self {
+            Job::Copy {
+                source,
+                dest,
+                dest_is_new,
+            } => copy_file(source, dest, *dest_is_new).map_err(|e| {
+                context(
+                    e,
+                    format!("Could not copy {} to {}", source.display(), dest.display()),
+                )
+            }),
+            Job::Symlink {
+                original,
+                target,
+                link,
+            } => create_symlink(original, target, link).map_err(|e| {
+                context(
+                    e,
+                    format!(
+                        "Could not create symlink {} to {}",
+                        link.display(),
+                        target.display()
+                    ),
+                )
+            }),
+        }
+    }
+}
+
 /// Copy a regular file, including its permissions. `dest_is_new` means nothing exists at dest.
 ///
 /// On Linux, a new dest is created exclusively, which fails instead of following a symlink that
@@ -293,6 +357,24 @@ impl CopyBuilder {
 
     /// Execute the copy operation
     pub fn run(&self) -> Result<(), std::io::Error> {
+        self.run_with_threads(1)
+    }
+
+    /// Execute the copy operation, copying files with up to 4 threads.
+    ///
+    /// The source is walked, directories are created and all checks are done on the calling thread,
+    /// while files are copied in parallel. This is faster for many small files on SSDs, but does not
+    /// help with large files, and can be slower on spinning disks.
+    pub fn run_par(&self) -> Result<(), std::io::Error> {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(4);
+        self.run_with_threads(threads)
+    }
+
+    /// Execute the copy operation, executing file operations on `threads` threads.
+    fn run_with_threads(&self, threads: usize) -> Result<(), std::io::Error> {
         // Resolve source first, so dest is not created if source is missing
         let abs_source = self.source.canonicalize().map_err(|e| {
             context(
@@ -334,9 +416,8 @@ impl CopyBuilder {
         // Directories created by this run. Nothing can exist in them yet, which saves looking up dest.
         // Only used on Linux, where new files are created exclusively and can't follow a symlink
         // that appeared in the meantime.
-        let track_fresh_dirs = cfg!(target_os = "linux");
         let mut fresh_dirs: HashSet<PathBuf> = HashSet::new();
-        if track_fresh_dirs && dest_created {
+        if cfg!(target_os = "linux") && dest_created {
             fresh_dirs.insert(abs_dest.clone());
         }
 
@@ -348,220 +429,264 @@ impl CopyBuilder {
             })
         };
 
-        let mut num_files_total = 1;
-        let mut num_files_processed = 0;
-
+        let mut progress = Progress {
+            callback: self.progress_callback.as_ref(),
+            total: 1,
+            processed: 0,
+        };
         if self.progress_callback.is_some() {
-            num_files_total = walk().filter_map(|e| e.ok()).count();
+            progress.total = walk().filter_map(|e| e.ok()).count();
         }
 
-        for entry in walk() {
-            // Don't ignore errors, as this would silently result in an incomplete copy
-            let entry = entry?;
-            if let Some(cb) = &self.progress_callback {
-                num_files_processed += 1;
-                cb(num_files_total, num_files_processed);
-            }
-
-            let rel_dest = entry.path().strip_prefix(&abs_source).map_err(|e| {
-                Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
-            })?;
-            let dest_entry = abs_dest.join(rel_dest);
-            let in_fresh_dir = !fresh_dirs.is_empty()
-                && dest_entry
-                    .parent()
-                    .map_or(false, |parent| fresh_dirs.contains(parent));
-
-            if !entry.file_type().is_dir() {
-                if !entry.file_type().is_file() && !entry.file_type().is_symlink() {
-                    // Sockets, fifos and devices can't be copied meaningfully
-                    warn!(
-                        "Skipping {}: unsupported file type {:?}",
-                        entry.path().display(),
-                        entry.file_type()
-                    );
-                    continue;
-                }
-
-                if !self.is_included(rel_dest) {
-                    continue;
-                }
-
-                // Look up dest only once, the result is used for all checks below
-                let dest_meta = if in_fresh_dir {
-                    None
-                } else {
-                    dest_entry.symlink_metadata().ok()
-                };
-                let dest_exists = dest_meta.is_some();
-
-                // Early out if target is present and overwrite is off
-                if !self.overwrite_all
-                    && dest_exists
-                    && !self.overwrite_if_newer
-                    && !self.overwrite_if_size_differs
+        if threads <= 1 {
+            for entry in walk() {
+                // Don't ignore errors, as this would silently result in an incomplete copy
+                let entry = entry?;
+                if let Some(job) =
+                    self.process_entry(entry, &abs_source, &abs_dest, &mut fresh_dirs)?
                 {
-                    continue;
+                    job.execute()?;
                 }
+                progress.step();
+            }
+            return Ok(());
+        }
 
-                // File is not present: copy it in any case
-                if !dest_exists {
-                    debug!(
-                        "Dest not present: CP {} DST {}",
-                        entry.path().display(),
-                        dest_entry.display()
-                    );
-                }
-
-                // Conditional overwrite checks (OR semantics: copy if any enabled condition matches).
-                // overwrite_all takes precedence over them.
-                if let (false, Some(dest_meta), true) = (
-                    self.overwrite_all,
-                    &dest_meta,
-                    self.overwrite_if_newer || self.overwrite_if_size_differs,
-                ) {
-                    let (newer, size_differs) = match entry.metadata() {
-                        Ok(source_meta) => (
-                            self.overwrite_if_newer && is_file_newer(&source_meta, dest_meta),
-                            self.overwrite_if_size_differs
-                                && is_filesize_different(&source_meta, dest_meta),
-                        ),
-                        Err(_) => (false, false),
+        // Jobs are handed to the workers through a bounded queue, so memory use does not grow with
+        // the number of files, and copying starts while the source is still being walked.
+        let (job_sender, job_receiver) = std::sync::mpsc::sync_channel::<Job>(256);
+        let job_receiver = std::sync::Mutex::new(job_receiver);
+        let (done_sender, done_receiver) = std::sync::mpsc::channel::<Result<(), Error>>();
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                let job_receiver = &job_receiver;
+                let done_sender = done_sender.clone();
+                scope.spawn(move || loop {
+                    let job = match job_receiver.lock().unwrap().recv() {
+                        Ok(job) => job,
+                        // All jobs are done
+                        Err(_) => break,
                     };
-                    if newer {
-                        debug!(
-                            "Source newer: CP {} DST {}",
-                            entry.path().display(),
-                            dest_entry.display()
-                        );
+                    // Stop once the result can't be received anymore, due to an error
+                    if done_sender.send(job.execute()).is_err() {
+                        break;
                     }
-                    if size_differs {
-                        debug!(
-                            "Source differs: CP {} DST {}",
-                            entry.path().display(),
-                            dest_entry.display()
-                        );
-                    }
-                    if !newer && !size_differs {
-                        continue;
-                    }
-                }
+                });
+            }
+            drop(done_sender);
 
-                // With include filters, directories are only created once a file in them is copied.
-                // They were checked for symlinks already, as directories are visited before their contents.
-                if !self.include_filters.is_empty() {
-                    if let Some(parent) = dest_entry.parent() {
-                        if !parent.is_dir() {
-                            debug!("MKDIR {}", parent.display());
-                            std::fs::create_dir_all(parent).map_err(|e| {
-                                context(
-                                    e,
-                                    format!("Could not create directory {}", parent.display()),
-                                )
-                            })?;
-                        }
-                    }
+            // Returning early drops the job sender and done receiver, which stops the workers
+            for entry in walk() {
+                // Don't ignore errors, as this would silently result in an incomplete copy
+                let entry = entry?;
+                match self.process_entry(entry, &abs_source, &abs_dest, &mut fresh_dirs)? {
+                    Some(job) => job_sender
+                        .send(job)
+                        .map_err(|_| Error::new(ErrorKind::Other, "Copy workers stopped"))?,
+                    None => progress.step(),
                 }
-
-                if entry.file_type().is_file() {
-                    let mut dest_is_new = !dest_exists;
-                    // Never write through a symlink in dest, as it may point outside of it
-                    if dest_meta.map_or(false, |m| m.file_type().is_symlink()) {
-                        debug!("RM LNK {}", dest_entry.display());
-                        remove_symlink(&dest_entry)?;
-                        dest_is_new = true;
-                    }
-                    // The regular copy operation
-                    debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
-                    copy_file(entry.path(), &dest_entry, dest_is_new).map_err(|e| {
-                        context(
-                            e,
-                            format!(
-                                "Could not copy {} to {}",
-                                entry.path().display(),
-                                dest_entry.display()
-                            ),
-                        )
-                    })?;
-                } else {
-                    debug!(
-                        "CP LNK {} DST {}",
-                        entry.path().display(),
-                        dest_entry.display()
-                    );
-                    let target = read_link(entry.path()).map_err(|e| {
-                        context(
-                            e,
-                            format!("Could not read symlink {}", entry.path().display()),
-                        )
-                    })?;
-                    // Creating a symlink fails if dest is already present
-                    if dest_exists {
-                        debug!("RM {}", dest_entry.display());
-                        remove_symlink(&dest_entry)?;
-                    }
-                    create_symlink(entry.path(), &target, &dest_entry).map_err(|e| {
-                        context(
-                            e,
-                            format!(
-                                "Could not create symlink {} to {}",
-                                dest_entry.display(),
-                                target.display()
-                            ),
-                        )
-                    })?;
-                }
-            } else {
-                let mut dest_meta = if in_fresh_dir {
-                    None
-                } else {
-                    dest_entry.symlink_metadata().ok()
-                };
-                if dest_meta
-                    .as_ref()
-                    .map_or(false, |m| m.file_type().is_symlink())
-                {
-                    // Copying into a symlinked dir could write outside of dest
-                    if !self.overwrite_all {
-                        return Err(Error::new(
-                            ErrorKind::AlreadyExists,
-                            format!(
-                                "Destination {} is a symlink, refusing to copy directory {} into it",
-                                dest_entry.display(),
-                                entry.path().display()
-                            ),
-                        ));
-                    }
-                    debug!("RM LNK {}", dest_entry.display());
-                    remove_symlink(&dest_entry)?;
-                    dest_meta = None;
-                }
-                // With include filters, only matching directories are created here
-                if !dest_meta.map_or(false, |m| m.is_dir()) && self.is_included(rel_dest) {
-                    debug!("MKDIR {}", entry.path().display());
-                    std::fs::create_dir_all(&dest_entry).map_err(|e| {
-                        context(
-                            e,
-                            format!("Could not create directory {}", dest_entry.display()),
-                        )
-                    })?;
-                    if track_fresh_dirs {
-                        fresh_dirs.insert(dest_entry);
-                    }
+                // Progress is reported on this thread, as the callback may not be thread-safe
+                for result in done_receiver.try_iter() {
+                    result?;
+                    progress.step();
                 }
             }
-        }
-
-        Ok(())
+            drop(job_sender);
+            for result in done_receiver.iter() {
+                result?;
+                progress.step();
+            }
+            Ok(())
+        })
     }
 
-    /// Formerly executed the copy operation in parallel. Now only calls [`CopyBuilder::run`].
-    #[deprecated(
-        since = "0.3.21",
-        note = "please use `run` instead. This is now just a wrapper around `run`."
-    )]
-    pub fn run_par(&self) -> Result<(), std::io::Error> {
-        self.run()
+    /// Check a source entry, prepare dest for it, and return the file operation to execute, if any.
+    /// Directories are created right away, as their contents are visited after them.
+    fn process_entry(
+        &self,
+        entry: walkdir::DirEntry,
+        abs_source: &Path,
+        abs_dest: &Path,
+        fresh_dirs: &mut HashSet<PathBuf>,
+    ) -> Result<Option<Job>, std::io::Error> {
+        let rel_dest = entry.path().strip_prefix(abs_source).map_err(|e| {
+            Error::new(ErrorKind::Other, format!("Could not strip prefix: {:?}", e))
+        })?;
+        let dest_entry = abs_dest.join(rel_dest);
+        let in_fresh_dir = !fresh_dirs.is_empty()
+            && dest_entry
+                .parent()
+                .map_or(false, |parent| fresh_dirs.contains(parent));
+
+        if !entry.file_type().is_dir() {
+            if !entry.file_type().is_file() && !entry.file_type().is_symlink() {
+                // Sockets, fifos and devices can't be copied meaningfully
+                warn!(
+                    "Skipping {}: unsupported file type {:?}",
+                    entry.path().display(),
+                    entry.file_type()
+                );
+                return Ok(None);
+            }
+
+            if !self.is_included(rel_dest) {
+                return Ok(None);
+            }
+
+            // Look up dest only once, the result is used for all checks below
+            let dest_meta = if in_fresh_dir {
+                None
+            } else {
+                dest_entry.symlink_metadata().ok()
+            };
+            let dest_exists = dest_meta.is_some();
+
+            // Early out if target is present and overwrite is off
+            if !self.overwrite_all
+                && dest_exists
+                && !self.overwrite_if_newer
+                && !self.overwrite_if_size_differs
+            {
+                return Ok(None);
+            }
+
+            // File is not present: copy it in any case
+            if !dest_exists {
+                debug!(
+                    "Dest not present: CP {} DST {}",
+                    entry.path().display(),
+                    dest_entry.display()
+                );
+            }
+
+            // Conditional overwrite checks (OR semantics: copy if any enabled condition matches).
+            // overwrite_all takes precedence over them.
+            if let (false, Some(dest_meta), true) = (
+                self.overwrite_all,
+                &dest_meta,
+                self.overwrite_if_newer || self.overwrite_if_size_differs,
+            ) {
+                let (newer, size_differs) = match entry.metadata() {
+                    Ok(source_meta) => (
+                        self.overwrite_if_newer && is_file_newer(&source_meta, dest_meta),
+                        self.overwrite_if_size_differs
+                            && is_filesize_different(&source_meta, dest_meta),
+                    ),
+                    Err(_) => (false, false),
+                };
+                if newer {
+                    debug!(
+                        "Source newer: CP {} DST {}",
+                        entry.path().display(),
+                        dest_entry.display()
+                    );
+                }
+                if size_differs {
+                    debug!(
+                        "Source differs: CP {} DST {}",
+                        entry.path().display(),
+                        dest_entry.display()
+                    );
+                }
+                if !newer && !size_differs {
+                    return Ok(None);
+                }
+            }
+
+            // With include filters, directories are only created once a file in them is copied.
+            // They were checked for symlinks already, as directories are visited before their contents.
+            if !self.include_filters.is_empty() {
+                if let Some(parent) = dest_entry.parent() {
+                    if !parent.is_dir() {
+                        debug!("MKDIR {}", parent.display());
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            context(
+                                e,
+                                format!("Could not create directory {}", parent.display()),
+                            )
+                        })?;
+                    }
+                }
+            }
+
+            if entry.file_type().is_file() {
+                let mut dest_is_new = !dest_exists;
+                // Never write through a symlink in dest, as it may point outside of it
+                if dest_meta.map_or(false, |m| m.file_type().is_symlink()) {
+                    debug!("RM LNK {}", dest_entry.display());
+                    remove_symlink(&dest_entry)?;
+                    dest_is_new = true;
+                }
+                // The regular copy operation
+                debug!("CP {} DST {}", entry.path().display(), dest_entry.display());
+                return Ok(Some(Job::Copy {
+                    source: entry.into_path(),
+                    dest: dest_entry,
+                    dest_is_new,
+                }));
+            } else {
+                debug!(
+                    "CP LNK {} DST {}",
+                    entry.path().display(),
+                    dest_entry.display()
+                );
+                let target = read_link(entry.path()).map_err(|e| {
+                    context(
+                        e,
+                        format!("Could not read symlink {}", entry.path().display()),
+                    )
+                })?;
+                // Creating a symlink fails if dest is already present
+                if dest_exists {
+                    debug!("RM {}", dest_entry.display());
+                    remove_symlink(&dest_entry)?;
+                }
+                return Ok(Some(Job::Symlink {
+                    original: entry.into_path(),
+                    target,
+                    link: dest_entry,
+                }));
+            }
+        } else {
+            let mut dest_meta = if in_fresh_dir {
+                None
+            } else {
+                dest_entry.symlink_metadata().ok()
+            };
+            if dest_meta
+                .as_ref()
+                .map_or(false, |m| m.file_type().is_symlink())
+            {
+                // Copying into a symlinked dir could write outside of dest
+                if !self.overwrite_all {
+                    return Err(Error::new(
+                        ErrorKind::AlreadyExists,
+                        format!(
+                            "Destination {} is a symlink, refusing to copy directory {} into it",
+                            dest_entry.display(),
+                            entry.path().display()
+                        ),
+                    ));
+                }
+                debug!("RM LNK {}", dest_entry.display());
+                remove_symlink(&dest_entry)?;
+                dest_meta = None;
+            }
+            // With include filters, only matching directories are created here
+            if !dest_meta.map_or(false, |m| m.is_dir()) && self.is_included(rel_dest) {
+                debug!("MKDIR {}", entry.path().display());
+                std::fs::create_dir_all(&dest_entry).map_err(|e| {
+                    context(
+                        e,
+                        format!("Could not create directory {}", dest_entry.display()),
+                    )
+                })?;
+                if cfg!(target_os = "linux") {
+                    fresh_dirs.insert(dest_entry);
+                }
+            }
+        }
+        Ok(None)
     }
 }
 

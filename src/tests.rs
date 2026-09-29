@@ -895,3 +895,134 @@ fn copy_file_new_does_not_follow_symlink() {
     assert_eq!(result.unwrap_err().kind(), ErrorKind::AlreadyExists);
     assert_eq!(outside, "outside", "File was written through a symlink");
 }
+
+/// Create a directory tree with nested directories and some files in each
+fn create_tree(root: &str) {
+    for dir in 0..10 {
+        for sub in 0..3 {
+            create_dir_all(format!("{root}/dir{dir}/sub{sub}")).unwrap();
+            for file in 0..10 {
+                std::fs::write(
+                    format!("{root}/dir{dir}/sub{sub}/file{file}"),
+                    format!("{dir} {sub} {file}"),
+                )
+                .unwrap();
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        symlink("dir0/sub0/file0", format!("{root}/link")).unwrap();
+        symlink("does_not_exist", format!("{root}/dir1/dangling")).unwrap();
+    }
+}
+
+/// List all entries below root with their contents, or symlink targets
+fn list_tree(root: &str) -> Vec<(PathBuf, String)> {
+    let mut entries: Vec<(PathBuf, String)> = WalkDir::new(root)
+        .into_iter()
+        .map(|e| e.unwrap())
+        .map(|e| {
+            let content = if e.file_type().is_symlink() {
+                format!("-> {}", read_link(e.path()).unwrap().display())
+            } else if e.file_type().is_file() {
+                std::fs::read_to_string(e.path()).unwrap()
+            } else {
+                "dir".to_string()
+            };
+            (e.path().strip_prefix(root).unwrap().to_path_buf(), content)
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+#[test]
+/// run_par must produce the same result as run.
+fn run_par_copies_like_run() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "par_src";
+    let dest_seq = "par_seq_dest";
+    let dest_par = "par_par_dest";
+
+    create_tree(source_dir);
+    CopyBuilder::new(source_dir, dest_seq).run().unwrap();
+    CopyBuilder::new(source_dir, dest_par).run_par().unwrap();
+
+    let source = list_tree(source_dir);
+    let seq = list_tree(dest_seq);
+    let par = list_tree(dest_par);
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_seq).unwrap();
+    std::fs::remove_dir_all(dest_par).unwrap();
+
+    assert!(source.len() > 300);
+    assert_eq!(seq, source);
+    assert_eq!(par, source);
+}
+
+#[test]
+/// Progress must count every entry once, ending at the total, with run and run_par.
+fn progress_reports_all_entries() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "progress_src";
+    let dest_seq = "progress_seq_dest";
+    let dest_par = "progress_par_dest";
+
+    create_tree(source_dir);
+    let num_entries = WalkDir::new(source_dir).into_iter().count();
+
+    let mut reports = vec![];
+    for (dest, parallel) in [(dest_seq, false), (dest_par, true)] {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let calls_cb = calls.clone();
+        let builder = CopyBuilder::new(source_dir, dest)
+            .with_progress(move |total, done| calls_cb.borrow_mut().push((total, done)));
+        if parallel {
+            builder.run_par().unwrap();
+        } else {
+            builder.run().unwrap();
+        }
+        let calls = calls.borrow().clone();
+        reports.push(calls);
+    }
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_seq).unwrap();
+    std::fs::remove_dir_all(dest_par).unwrap();
+
+    for calls in reports {
+        let expected: Vec<(usize, usize)> = (1..=num_entries).map(|i| (num_entries, i)).collect();
+        assert_eq!(calls, expected);
+    }
+}
+
+#[test]
+/// Errors while copying in parallel must be returned.
+fn run_par_returns_errors() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "par_error_src";
+    let dest_dir = "par_error_dest";
+
+    create_tree(source_dir);
+    // A directory in dest where source has a file makes the copy fail
+    create_dir_all(format!("{dest_dir}/dir5/sub1/file3")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .run_par();
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains(&format!(
+            "{source_dir}{}dir5{}sub1{}file3",
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR
+        )),
+        "Error does not contain the path: {}",
+        message
+    );
+}
