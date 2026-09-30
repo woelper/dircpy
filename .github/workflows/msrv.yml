@@ -14,7 +14,8 @@ jobs:
       # Keep in sync with rust-version in Cargo.toml
       - uses: dtolnay/rust-toolchain@1.64.0
       # The dev-dependencies need a newer Rust, so check dircpy the way dependents build it:
-      # from a crate depending on it. Newer log versions require Rust 1.71, so pin an older one.
+      # from a crate depending on it. Newer versions of log and of walkdir's Windows
+      # dependencies require Rust 1.71, so pin older ones.
       - name: Check as a dependency
         shell: bash
         run: |
@@ -23,4 +24,5 @@ jobs:
           echo "dircpy = { path = '$GITHUB_WORKSPACE' }" >> Cargo.toml
           cargo generate-lockfile
           cargo update -p log --precise 0.4.20
+          cargo update -p winapi-util --precise 0.1.6
           cargo check
