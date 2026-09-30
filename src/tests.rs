@@ -76,40 +76,6 @@ fn copy_subdir() {
     std::fs::remove_dir_all("source").unwrap();
 }
 
-#[cfg(feature = "jwalk")]
-#[test]
-fn copy_subdir_jwalk() {
-    use std::fs::File;
-    use std::io::Write;
-
-    let source_dir = "overwrite_sourcej";
-    let dest_dir = "overwrite_destj";
-
-    std::env::set_var("RUST_LOG", "debug");
-    let _ = env_logger::try_init();
-    create_dir_all(source_dir).unwrap();
-    create_dir_all(dest_dir).unwrap();
-    File::create(format!("{source_dir}/a.txt")).unwrap();
-    let mut file_b = File::create(format!("{source_dir}/b.txt")).unwrap();
-
-    let contents = "Contents changed";
-    // Copy once, both files are empty
-    CopyBuilder::new(source_dir, dest_dir).run().unwrap();
-    // write something to file b so we can check if we overwrite it
-    write!(file_b, "{contents}").unwrap();
-    // perform a second copy
-    CopyBuilder::new(source_dir, dest_dir)
-        .overwrite(true)
-        .run()
-        .unwrap();
-    // make sure the contents of b are now changed
-    let s = read_to_string(File::open(format!("{dest_dir}/b.txt")).unwrap()).unwrap();
-    assert!(s == contents, "Destination was not overwritten");
-
-    std::fs::remove_dir_all(source_dir).unwrap();
-    std::fs::remove_dir_all(dest_dir).unwrap();
-}
-
 #[test]
 fn copy_overwrite() {
     use std::fs::File;
@@ -246,14 +212,14 @@ fn copy_cargo() {
     unzip::Unzipper::new(reader, sample_dir)
         .unzip()
         .expect("Could not expand cargo sources");
-    let num_input_files = WalkDir::new(&sample_dir)
+    let num_input_files = WalkDir::new(sample_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .count();
 
     CopyBuilder::new(
-        &Path::new(sample_dir).canonicalize().unwrap(),
-        &PathBuf::from(&output_dir),
+        Path::new(sample_dir).canonicalize().unwrap(),
+        PathBuf::from(&output_dir),
     )
     .run()
     .unwrap();
@@ -290,14 +256,14 @@ fn copy_cargo_progress() {
     unzip::Unzipper::new(reader, &sample_dir)
         .unzip()
         .expect("Could not expand cargo sources");
-    let num_input_files = WalkDir::new(&sample_dir)
+    let num_input_files = WalkDir::new(sample_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .count();
 
     CopyBuilder::new(
-        &Path::new(&sample_dir).canonicalize().unwrap(),
-        &PathBuf::from(&output_dir),
+        Path::new(&sample_dir).canonicalize().unwrap(),
+        PathBuf::from(&output_dir),
     )
     .with_progress(|all, done| {
         info!("copied {done}/{all}");
@@ -400,4 +366,663 @@ fn overwrite_or_newer_same_size() {
 
     std::fs::remove_dir_all(source_dir).unwrap();
     std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+/// A symlink already present in dest must be replaced, not written through.
+fn overwrite_does_not_follow_dest_symlink() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "no_follow_src";
+    let dest_dir = "no_follow_dest";
+    let outside_dir = "no_follow_outside";
+
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    create_dir_all(outside_dir).unwrap();
+    let outside_abs = Path::new(outside_dir).canonicalize().unwrap();
+
+    std::fs::write(format!("{source_dir}/file"), "source").unwrap();
+    std::fs::write(format!("{source_dir}/sub/nested"), "source").unwrap();
+    std::fs::write(format!("{outside_dir}/file"), "outside").unwrap();
+
+    // dest/file points at a file outside of dest, dest/sub at a directory outside of dest
+    symlink(outside_abs.join("file"), format!("{dest_dir}/file")).unwrap();
+    symlink(&outside_abs, format!("{dest_dir}/sub")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .run()
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(format!("{outside_dir}/file")).unwrap(),
+        "outside",
+        "File outside of dest was overwritten through a symlink"
+    );
+    assert!(
+        !Path::new(&format!("{outside_dir}/nested")).exists(),
+        "File was copied into a directory outside of dest through a symlink"
+    );
+    assert!(Path::new(&format!("{dest_dir}/file"))
+        .symlink_metadata()
+        .unwrap()
+        .is_file());
+    assert_eq!(
+        std::fs::read_to_string(format!("{dest_dir}/file")).unwrap(),
+        "source"
+    );
+    assert!(Path::new(&format!("{dest_dir}/sub"))
+        .symlink_metadata()
+        .unwrap()
+        .is_dir());
+    assert_eq!(
+        std::fs::read_to_string(format!("{dest_dir}/sub/nested")).unwrap(),
+        "source"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    std::fs::remove_dir_all(outside_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+/// Copying a symlink over an existing one must replace it instead of failing.
+fn overwrite_existing_symlink() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "overwrite_symlink_src";
+    let dest_dir = "overwrite_symlink_dest";
+
+    create_dir_all(source_dir).unwrap();
+    symlink("old_target", format!("{source_dir}/link")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir).run().unwrap();
+
+    std::fs::remove_file(format!("{source_dir}/link")).unwrap();
+    symlink("new_target", format!("{source_dir}/link")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .run()
+        .unwrap();
+    assert_eq!(
+        read_link(format!("{dest_dir}/link")).unwrap(),
+        Path::new("new_target")
+    );
+
+    // conditional overwrite must work as well: "old_target_x" differs in size
+    std::fs::remove_file(format!("{source_dir}/link")).unwrap();
+    symlink("old_target_x", format!("{source_dir}/link")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+    assert_eq!(
+        read_link(format!("{dest_dir}/link")).unwrap(),
+        Path::new("old_target_x")
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[test]
+/// `overwrite(true)` must win even if a conditional overwrite would not copy.
+fn overwrite_all_with_conditional_flags() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "overwrite_all_cond_src";
+    let dest_dir = "overwrite_all_cond_dest";
+
+    create_dir_all(source_dir).unwrap();
+    create_dir_all(dest_dir).unwrap();
+
+    // same size, dest is newer: neither condition matches
+    std::fs::write(format!("{source_dir}/file"), "SRC").unwrap();
+    std::fs::write(format!("{dest_dir}/file"), "DST").unwrap();
+    let now = SystemTime::now();
+    File::options()
+        .write(true)
+        .open(format!("{source_dir}/file"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(3600))
+        .unwrap();
+    File::options()
+        .write(true)
+        .open(format!("{dest_dir}/file"))
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(format!("{dest_dir}/file")).unwrap(),
+        "SRC",
+        "overwrite(true) was ignored because conditional flags were set"
+    );
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+/// Special files (sockets, fifos, devices) must be skipped instead of panicking.
+fn skip_special_files() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "special_src";
+    let dest_dir = "special_dest";
+
+    create_dir_all(source_dir).unwrap();
+    File::create(format!("{source_dir}/file")).unwrap();
+    let _socket = std::os::unix::net::UnixListener::bind(format!("{source_dir}/socket")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    assert!(result.is_ok(), "Copy failed: {:?}", result);
+    assert!(Path::new(&format!("{dest_dir}/file")).is_file());
+    assert!(Path::new(&format!("{dest_dir}/socket"))
+        .symlink_metadata()
+        .is_err());
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+}
+
+#[test]
+/// A missing source must fail without creating the destination.
+fn missing_source_does_not_create_dest() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "missing_src";
+    let dest_dir = "missing_src_dest";
+
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    let dest_created = Path::new(dest_dir).exists();
+    let _ = std::fs::remove_dir_all(dest_dir);
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
+    assert!(
+        !dest_created,
+        "Destination was created for a missing source"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+/// Errors while walking the source must be returned instead of being ignored.
+fn unreadable_source_dir_fails() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "unreadable_src";
+    let dest_dir = "unreadable_dest";
+    let locked = format!("{source_dir}/locked");
+
+    create_dir_all(&locked).unwrap();
+    File::create(format!("{locked}/file")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    // Permissions are not enforced for root, so there is nothing to test
+    let is_root = std::fs::read_dir(&locked).is_ok();
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    let _ = std::fs::remove_dir_all(dest_dir);
+
+    if is_root {
+        eprintln!("Skipping unreadable_source_dir_fails: running as root");
+        return;
+    }
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+}
+
+#[test]
+/// Filters must only match the path relative to the source, not the source itself.
+fn filters_match_relative_path() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "rel_filter_src";
+    let dest_exclude = "rel_filter_exclude_dest";
+    let dest_include = "rel_filter_include_dest";
+
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    File::create(format!("{source_dir}/a.txt")).unwrap();
+    File::create(format!("{source_dir}/sub/b.txt")).unwrap();
+
+    // "rel_filter" is only part of the source path, so nothing is excluded
+    CopyBuilder::new(source_dir, dest_exclude)
+        .with_exclude_filter("rel_filter")
+        .run()
+        .unwrap();
+    // ...and nothing is included
+    CopyBuilder::new(source_dir, dest_include)
+        .with_include_filter("rel_filter")
+        .run()
+        .unwrap();
+
+    let excluded_a = Path::new(&format!("{dest_exclude}/a.txt")).is_file();
+    let excluded_b = Path::new(&format!("{dest_exclude}/sub/b.txt")).is_file();
+    let included_a = Path::new(&format!("{dest_include}/a.txt")).exists();
+    let included_b = Path::new(&format!("{dest_include}/sub/b.txt")).exists();
+
+    // Directory parts of the relative path still match
+    let dest_sub = "rel_filter_sub_dest";
+    CopyBuilder::new(source_dir, dest_sub)
+        .with_include_filter("sub")
+        .run()
+        .unwrap();
+    let sub_a = Path::new(&format!("{dest_sub}/a.txt")).exists();
+    let sub_b = Path::new(&format!("{dest_sub}/sub/b.txt")).is_file();
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_exclude).unwrap();
+    std::fs::remove_dir_all(dest_include).unwrap();
+    std::fs::remove_dir_all(dest_sub).unwrap();
+
+    assert!(
+        excluded_a && excluded_b,
+        "Exclude filter matched the source path"
+    );
+    assert!(
+        !included_a && !included_b,
+        "Include filter matched the source path"
+    );
+    assert!(
+        !sub_a && sub_b,
+        "Include filter did not match a relative directory"
+    );
+}
+
+#[test]
+/// A file as source must fail without creating the destination.
+fn file_source_fails() {
+    let _ = env_logger::builder().try_init();
+    let source_file = "file_source";
+    let dest_dir = "file_source_dest";
+
+    File::create(source_file).unwrap();
+
+    let result = CopyBuilder::new(source_file, dest_dir).run();
+
+    let dest_created = Path::new(dest_dir).exists();
+    std::fs::remove_file(source_file).unwrap();
+    let _ = std::fs::remove_dir_all(dest_dir);
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    assert!(!dest_created, "Destination was created for a file source");
+}
+
+#[test]
+/// Directories must not be created if they are excluded or don't match an include filter.
+fn filters_apply_to_directories() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "dir_filter_src";
+    let dest_exclude = "dir_filter_exclude_dest";
+    let dest_include = "dir_filter_include_dest";
+
+    create_dir_all(format!("{source_dir}/skipme/nested")).unwrap();
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    create_dir_all(format!("{source_dir}/other")).unwrap();
+    create_dir_all(format!("{source_dir}/empty")).unwrap();
+    create_dir_all(format!("{source_dir}/keep_empty")).unwrap();
+    File::create(format!("{source_dir}/a.txt")).unwrap();
+    File::create(format!("{source_dir}/sub/b.txt")).unwrap();
+    File::create(format!("{source_dir}/other/c.log")).unwrap();
+    File::create(format!("{source_dir}/skipme/nested/d.txt")).unwrap();
+
+    CopyBuilder::new(source_dir, dest_exclude)
+        .with_exclude_filter("skipme")
+        .run()
+        .unwrap();
+    CopyBuilder::new(source_dir, dest_include)
+        .with_include_filter(".txt")
+        .with_include_filter("keep")
+        .run()
+        .unwrap();
+
+    let exists = |p: &str| Path::new(p).exists();
+    let excluded_skipme = exists(&format!("{dest_exclude}/skipme"));
+    let excluded_sub = exists(&format!("{dest_exclude}/sub/b.txt"));
+    let included_a = exists(&format!("{dest_include}/a.txt"));
+    let included_b = exists(&format!("{dest_include}/sub/b.txt"));
+    let included_d = exists(&format!("{dest_include}/skipme/nested/d.txt"));
+    let included_other = exists(&format!("{dest_include}/other"));
+    let included_empty = exists(&format!("{dest_include}/empty"));
+    let included_keep = exists(&format!("{dest_include}/keep_empty"));
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_exclude).unwrap();
+    std::fs::remove_dir_all(dest_include).unwrap();
+
+    assert!(!excluded_skipme, "Excluded directory was created");
+    assert!(
+        excluded_sub,
+        "Directory that is not excluded was not copied"
+    );
+    assert!(
+        included_a && included_b && included_d,
+        "Included files in subdirectories were not copied"
+    );
+    assert!(
+        !included_other,
+        "Directory without included files was created"
+    );
+    assert!(
+        !included_empty,
+        "Empty directory not matching include was created"
+    );
+    assert!(
+        included_keep,
+        "Directory matching include filter was not created"
+    );
+}
+
+#[test]
+/// Errors must mention the path they occurred on.
+fn errors_contain_path() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "error_path_src";
+    let dest_dir = "error_path_dest";
+
+    create_dir_all(source_dir).unwrap();
+    File::create(format!("{source_dir}/file")).unwrap();
+    // A directory in dest where source has a file makes the copy fail
+    create_dir_all(format!("{dest_dir}/file")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir).overwrite(true).run();
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains(&format!("{source_dir}{}file", std::path::MAIN_SEPARATOR)),
+        "Error does not contain the path: {}",
+        message
+    );
+}
+
+#[cfg(windows)]
+#[test]
+/// Symlinks to files and directories must be copied on Windows as well.
+fn copy_symlinks_windows() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let _ = env_logger::builder().try_init();
+    let source_dir = "win_symlink_src";
+    let dest_dir = "win_symlink_dest";
+
+    create_dir_all(format!("{source_dir}/dir")).unwrap();
+    File::create(format!("{source_dir}/file")).unwrap();
+    symlink_file("file", format!("{source_dir}/file_link")).unwrap();
+    symlink_dir("dir", format!("{source_dir}/dir_link")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir).run();
+
+    let file_link = read_link(format!("{dest_dir}/file_link"));
+    let dir_link = read_link(format!("{dest_dir}/dir_link"));
+    let dir_link_is_dir = Path::new(&format!("{dest_dir}/dir_link")).is_dir();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    let _ = std::fs::remove_dir_all(dest_dir);
+
+    result.unwrap();
+    assert_eq!(file_link.unwrap(), Path::new("file"));
+    assert_eq!(dir_link.unwrap(), Path::new("dir"));
+    assert!(
+        dir_link_is_dir,
+        "Directory symlink was created as file symlink"
+    );
+}
+
+#[test]
+/// A re-run with conditional overwrites must not copy files that are unchanged.
+fn conditional_overwrite_skips_unchanged() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "skip_unchanged_src";
+    let dest_dir = "skip_unchanged_dest";
+
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    std::fs::write(format!("{source_dir}/sub/file"), "SRC").unwrap();
+    CopyBuilder::new(source_dir, dest_dir).run().unwrap();
+
+    // same size, dest is newer: neither condition matches
+    std::fs::write(format!("{dest_dir}/sub/file"), "DST").unwrap();
+    let now = SystemTime::now();
+    File::options()
+        .write(true)
+        .open(format!("{source_dir}/sub/file"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(3600))
+        .unwrap();
+    File::options()
+        .write(true)
+        .open(format!("{dest_dir}/sub/file"))
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+
+    CopyBuilder::new(source_dir, dest_dir)
+        .overwrite_if_newer(true)
+        .overwrite_if_size_differs(true)
+        .run()
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{dest_dir}/sub/file")).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    assert_eq!(content, "DST", "Unchanged file was copied");
+}
+
+#[cfg(unix)]
+#[test]
+/// Permissions must be copied exactly, regardless of the umask or an existing dest file.
+fn copy_keeps_permissions() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "permissions_src";
+    let dest_new = "permissions_new_dest";
+    let dest_existing = "permissions_existing_dest";
+
+    create_dir_all(format!("{source_dir}/sub")).unwrap();
+    // 0o777 is restricted by any umask when a file is created
+    std::fs::write(format!("{source_dir}/sub/open"), "open").unwrap();
+    std::fs::set_permissions(
+        format!("{source_dir}/sub/open"),
+        std::fs::Permissions::from_mode(0o777),
+    )
+    .unwrap();
+    std::fs::write(format!("{source_dir}/sub/private"), "private").unwrap();
+    std::fs::set_permissions(
+        format!("{source_dir}/sub/private"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+
+    // dest does not exist yet
+    CopyBuilder::new(source_dir, dest_new).run().unwrap();
+
+    // dest exists, with a file with different permissions
+    create_dir_all(format!("{dest_existing}/sub")).unwrap();
+    std::fs::write(format!("{dest_existing}/sub/private"), "old").unwrap();
+    std::fs::set_permissions(
+        format!("{dest_existing}/sub/private"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    CopyBuilder::new(source_dir, dest_existing)
+        .overwrite(true)
+        .run()
+        .unwrap();
+
+    let mode = |p: String| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    let modes = [
+        mode(format!("{dest_new}/sub/open")),
+        mode(format!("{dest_new}/sub/private")),
+        mode(format!("{dest_existing}/sub/open")),
+        mode(format!("{dest_existing}/sub/private")),
+    ];
+    let private_content = std::fs::read_to_string(format!("{dest_existing}/sub/private")).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_new).unwrap();
+    std::fs::remove_dir_all(dest_existing).unwrap();
+
+    assert_eq!(modes, [0o777, 0o600, 0o777, 0o600]);
+    assert_eq!(private_content, "private");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+/// Copying to a dest that is expected to be new must not follow a symlink that appeared there.
+fn copy_file_new_does_not_follow_symlink() {
+    let _ = env_logger::builder().try_init();
+    let dir = "copy_file_new_dir";
+
+    create_dir_all(dir).unwrap();
+    std::fs::write(format!("{dir}/source"), "source").unwrap();
+    std::fs::write(format!("{dir}/outside"), "outside").unwrap();
+    symlink("outside", format!("{dir}/dest")).unwrap();
+
+    let result = copy_file(
+        Path::new(&format!("{dir}/source")),
+        Path::new(&format!("{dir}/dest")),
+        true,
+    );
+
+    let outside = std::fs::read_to_string(format!("{dir}/outside")).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::AlreadyExists);
+    assert_eq!(outside, "outside", "File was written through a symlink");
+}
+
+/// Create a directory tree with nested directories and some files in each
+fn create_tree(root: &str) {
+    for dir in 0..10 {
+        for sub in 0..3 {
+            create_dir_all(format!("{root}/dir{dir}/sub{sub}")).unwrap();
+            for file in 0..10 {
+                std::fs::write(
+                    format!("{root}/dir{dir}/sub{sub}/file{file}"),
+                    format!("{dir} {sub} {file}"),
+                )
+                .unwrap();
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        symlink("dir0/sub0/file0", format!("{root}/link")).unwrap();
+        symlink("does_not_exist", format!("{root}/dir1/dangling")).unwrap();
+    }
+}
+
+/// List all entries below root with their contents, or symlink targets
+fn list_tree(root: &str) -> Vec<(PathBuf, String)> {
+    let mut entries: Vec<(PathBuf, String)> = WalkDir::new(root)
+        .into_iter()
+        .map(|e| e.unwrap())
+        .map(|e| {
+            let content = if e.file_type().is_symlink() {
+                format!("-> {}", read_link(e.path()).unwrap().display())
+            } else if e.file_type().is_file() {
+                std::fs::read_to_string(e.path()).unwrap()
+            } else {
+                "dir".to_string()
+            };
+            (e.path().strip_prefix(root).unwrap().to_path_buf(), content)
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+#[test]
+/// run_par must produce the same result as run.
+fn run_par_copies_like_run() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "par_src";
+    let dest_seq = "par_seq_dest";
+    let dest_par = "par_par_dest";
+
+    create_tree(source_dir);
+    CopyBuilder::new(source_dir, dest_seq).run().unwrap();
+    CopyBuilder::new(source_dir, dest_par).run_par().unwrap();
+
+    let source = list_tree(source_dir);
+    let seq = list_tree(dest_seq);
+    let par = list_tree(dest_par);
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_seq).unwrap();
+    std::fs::remove_dir_all(dest_par).unwrap();
+
+    assert!(source.len() > 300);
+    assert_eq!(seq, source);
+    assert_eq!(par, source);
+}
+
+#[test]
+/// Progress must count every entry once, ending at the total, with run and run_par.
+fn progress_reports_all_entries() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "progress_src";
+    let dest_seq = "progress_seq_dest";
+    let dest_par = "progress_par_dest";
+
+    create_tree(source_dir);
+    let num_entries = WalkDir::new(source_dir).into_iter().count();
+
+    let mut reports = vec![];
+    for (dest, parallel) in [(dest_seq, false), (dest_par, true)] {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let calls_cb = calls.clone();
+        let builder = CopyBuilder::new(source_dir, dest)
+            .with_progress(move |total, done| calls_cb.borrow_mut().push((total, done)));
+        if parallel {
+            builder.run_par().unwrap();
+        } else {
+            builder.run().unwrap();
+        }
+        let calls = calls.borrow().clone();
+        reports.push(calls);
+    }
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_seq).unwrap();
+    std::fs::remove_dir_all(dest_par).unwrap();
+
+    for calls in reports {
+        let expected: Vec<(usize, usize)> = (1..=num_entries).map(|i| (num_entries, i)).collect();
+        assert_eq!(calls, expected);
+    }
+}
+
+#[test]
+/// Errors while copying in parallel must be returned.
+fn run_par_returns_errors() {
+    let _ = env_logger::builder().try_init();
+    let source_dir = "par_error_src";
+    let dest_dir = "par_error_dest";
+
+    create_tree(source_dir);
+    // A directory in dest where source has a file makes the copy fail
+    create_dir_all(format!("{dest_dir}/dir5/sub1/file3")).unwrap();
+
+    let result = CopyBuilder::new(source_dir, dest_dir)
+        .overwrite(true)
+        .run_par();
+
+    std::fs::remove_dir_all(source_dir).unwrap();
+    std::fs::remove_dir_all(dest_dir).unwrap();
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains(&format!(
+            "{source_dir}{}dir5{}sub1{}file3",
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR
+        )),
+        "Error does not contain the path: {}",
+        message
+    );
 }
